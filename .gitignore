@@ -1,0 +1,34 @@
+# Project-owned code is tracked; everything else stays local.
+# Nested knowledge bases are independent clones (pull-to-update via
+# scripts/update_sources.ps1) - deliberately NOT submodules (ADR-301).
+Anthropic-Cybersecurity-Skills/
+asvs/
+attack-stix-data/
+comp-ai/
+compliance-as-code/
+comply/
+firefox/
+gdpr-checklist/
+juice-shop/
+jupiterone-policies/
+nist-csf/
+opengrc/
+oscal-content/
+owasp-top10/
+probo/
+secure-controls-framework/
+security-templates/
+
+# generated / ephemeral
+reports/
+graphify-out/
+__pycache__/
+*.pyc
+*.sarif
+*.baseline
+
+# secrets
+.env
+
+# tooling state
+.recurspec/

@@ -1,0 +1,60 @@
+# Universal Compliance Orchestrator Configuration
+
+# -----------------------------------------------------------------------------
+# FRAMEWORK SOURCES
+# If local_path does not exist, the sync script will attempt to fetch from remote_url
+# -----------------------------------------------------------------------------
+frameworks:
+  nist_csf:
+    local_path: "nist-csf/README.md"
+    remote_url: "https://raw.githubusercontent.com/local-ai-grc/nist-csf/main/README.md"
+  jupiterone:
+    local_path: "jupiterone-policies/templates/policies"
+    remote_url: "https://github.com/JupiterOne/security-policy-templates.git"
+    type: "git" # 'file' or 'git'
+  comply:
+    local_path: "comply/example/policies"
+    remote_url: "https://github.com/strongdm/comply.git"
+    type: "git"
+
+# -----------------------------------------------------------------------------
+# TOOL CONFIGURATION (100% Open Source / Free)
+# -----------------------------------------------------------------------------
+tools:
+  checkov:
+    enabled: true
+    # Runs entirely locally using Checkov's OSS engine
+    soft_fail: true
+  semgrep:
+    enabled: true
+    # Uses Semgrep's free community rulesets. Enterprise tokens are disabled.
+    config:
+      - "p/security-audit"
+      - "p/secrets"
+      - "p/default"
+  trivy:
+    enabled: true 
+    # Requires local trivy binary (OSS)
+    # Available at: https://github.com/aquasecurity/trivy
+  osv:
+    enabled: true
+    # Queries the Google OSV API for real-time package vulnerabilities (SCA)
+    
+# -----------------------------------------------------------------------------
+# DAST & LIVE NETWORK AUDITING
+# Define APIs and websites to aggressively scan for security headers,
+# TLS configuration, and information leaks.
+# -----------------------------------------------------------------------------
+network_targets:
+  - "https://example.com"
+  - "https://api.example.com/health"
+
+# -----------------------------------------------------------------------------
+# GLOBAL SETTINGS
+
+# -----------------------------------------------------------------------------
+settings:
+  fail_on_high: false
+  output_dir: "reports"
+  mapping_file: "scripts/framework_mappings.json"
+  metadata_file: "scripts/framework_metadata.json"

@@ -1,0 +1,8 @@
+{
+    "oscal-content":  "78650f02ad9321bb7b817846f8fbd4f2bcd620de",
+    "secure-controls-framework":  "b1aef747613216a3d6663495ac60528c01355084",
+    "attack-stix-data":  "6cda5ad8462c79e14fbb872f4e09059b18e0cfc4",
+    "asvs":  "cdc8a0f68ac2a9f9e3739266acdac0e4a98badee",
+    "owasp-top10":  "66ebc4798d2ca72973967a20264bdeb70dcf0a13",
+    "compliance-as-code":  "d7ad56f52125c525fbce1eb71112cd7a782cce6e"
+}
