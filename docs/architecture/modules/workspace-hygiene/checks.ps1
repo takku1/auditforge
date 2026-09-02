@@ -11,7 +11,7 @@ if (-not (Test-Path (Join-Path $root '.git'))) { Write-Host 'MISS .git repo'; $f
 
 $ignore = Get-Content (Join-Path $root '.gitignore') -Raw
 $cloneDirs = @('asvs', 'attack-stix-data', 'comp-ai', 'compliance-as-code', 'comply',
-    'firefox', 'gdpr-checklist', 'juice-shop', 'jupiterone-policies', 'nist-csf',
+    'gdpr-checklist', 'juice-shop', 'jupiterone-policies', 'nist-csf',
     'opengrc', 'oscal-content', 'owasp-top10', 'probo',
     'secure-controls-framework', 'security-templates')
 foreach ($d in $cloneDirs) {
@@ -35,7 +35,7 @@ $local = @(Get-ChildItem (Join-Path $root 'scripts') -Filter '*.py' |
     @(Get-ChildItem (Join-Path $root 'scripts') -Directory |
         Select-Object -ExpandProperty Name)
 $stdlib = @('os','json','re','sys','subprocess','argparse','pathlib','typing','unittest',
-            'tempfile','shutil','datetime','urllib','contextlib')
+            'tempfile','shutil','datetime','urllib','contextlib','__future__','hashlib')
 $imports = Get-ChildItem (Join-Path $root 'scripts') -Filter '*.py' |
     Get-Content | ForEach-Object {
         if ($_ -match '^\s*(?:import|from)\s+([a-zA-Z_][a-zA-Z0-9_]*)') { $Matches[1].ToLower() }

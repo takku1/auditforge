@@ -32,9 +32,7 @@ $sources = [ordered]@{
     'asvs'                      = 'https://github.com/OWASP/ASVS.git'
     'owasp-top10'               = 'https://github.com/OWASP/Top10.git'
     'secure-controls-framework' = 'https://github.com/securecontrolsframework/securecontrolsframework.git'
-    'firefox'                   = 'https://github.com/mozilla-firefox/firefox.git'
     'juice-shop'                = 'https://github.com/juice-shop/juice-shop.git'
-    'Anthropic-Cybersecurity-Skills' = 'https://github.com/mukul975/Anthropic-Cybersecurity-Skills.git'
 }
 
 $results = @()
