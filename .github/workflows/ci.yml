@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-and-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run test suite
+        run: python -m pytest scripts/ -p no:randomly -v
+
+      # Self-scan of project-owned code only (scripts/, docs/, config/ - see
+      # CLAUDE.md's Workspace Layout table). Deliberately does NOT run
+      # scripts/update_sources.ps1 first: that clones ~15 third-party
+      # knowledge bases (multi-GB, one of them the full Firefox source tree)
+      # and is a session-start operation, not something CI should do on
+      # every push.
+      - name: Self-audit (scripts/)
+        run: python scripts/audit_repo.py scripts --fail-on HIGH
+
+      - name: Self-audit (docs/)
+        run: python scripts/audit_repo.py docs --fail-on HIGH
+
+      - name: Self-audit (config/)
+        run: python scripts/audit_repo.py config --fail-on HIGH
+
+      - name: Workspace hygiene check
+        shell: pwsh
+        run: ./docs/architecture/modules/workspace-hygiene/checks.ps1

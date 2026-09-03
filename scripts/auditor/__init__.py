@@ -3,6 +3,28 @@ from .rules import RULES, RULES_BY_ID, SEVERITIES, SEVERITY_RANK
 from .orchestrator import UniversalAuditor
 from .scanners import scan_file
 
+def _git_tracked_files(root: str):
+    """Set of git-tracked paths (relative, /-separated) under root, or None
+    if root isn't inside a git repo / git isn't on PATH - callers must treat
+    None as "unavailable", not "nothing tracked". Computed once per scan
+    rather than shelling out per-finding. See
+    docs/field-test-roninai-2026-08-25.md §G2 (R-009): a scanner that can't
+    tell tracked from untracked gives identical "rotate now" remediation to
+    a secret that was never committed, which is wrong in both directions.
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "-C", root, "ls-files"],
+            capture_output=True, text=True, encoding="utf-8", errors="ignore",
+        )
+    except (OSError, FileNotFoundError):
+        return None
+    if result.returncode != 0:
+        return None
+    return {line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()}
+
+
 def audit_directory(root: str, excludes: list = None, min_severity: str = "LOW") -> dict:
     from .scanners import iter_files, scan_file
     from datetime import datetime, timezone
@@ -12,6 +34,11 @@ def audit_directory(root: str, excludes: list = None, min_severity: str = "LOW")
     for path, rel in iter_files(root, excludes):
         files_scanned += 1
         findings.extend(scan_file(path, rel))
+
+    tracked = _git_tracked_files(root)
+    if tracked is not None:
+        for f in findings:
+            f.git_tracked = f.file.replace("\\", "/") in tracked
 
     threshold = SEVERITY_RANK[min_severity]
     findings = [f for f in findings if SEVERITY_RANK[f.severity] <= threshold]

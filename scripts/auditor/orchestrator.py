@@ -1,7 +1,7 @@
 import os
 import yaml
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from .models import UnifiedFinding
 from .reporting import to_universal_markdown, to_universal_json
 from . import scanners
@@ -44,8 +44,8 @@ class UniversalAuditor:
         conf = self.config["tools"].get("osv", {"enabled": True})
         self.findings.extend(scanners.run_dependency_audit(self.target_dir, conf, self.mapping_data))
 
-    def run_network_audit(self):
-        targets = self.config.get("network_targets", [])
+    def run_network_audit(self, override_targets: Optional[List[str]] = None):
+        targets = override_targets if override_targets is not None else self.config.get("network_targets", [])
         self.findings.extend(scanners.run_network_audit(targets, self.mapping_data))
 
     def generate_report(self, output_format: str) -> str:
@@ -56,7 +56,8 @@ class UniversalAuditor:
             "medium": sum(1 for f in self.findings if f.severity.upper() in ["MEDIUM", "WARNING"]),
             "low": sum(1 for f in self.findings if f.severity.upper() in ["LOW", "INFO"]),
         }
+        availability = scanners.engine_availability()
 
         if output_format == "markdown":
-            return to_universal_markdown(self.findings, self.mapping_data, self.metadata_data, summary)
-        return to_universal_json(self.findings, summary)
+            return to_universal_markdown(self.findings, self.mapping_data, self.metadata_data, summary, availability)
+        return to_universal_json(self.findings, summary, availability)

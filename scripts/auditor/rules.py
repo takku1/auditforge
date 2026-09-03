@@ -47,6 +47,14 @@ PLACEHOLDER_RE = re.compile(
     r"\bsecret\b|\bpassword\b|\bzippity\b|\bmock\b|\bapi[_-]?key\b)"  # Literal common placeholders
 )
 
+# RFC 2606 / RFC 6761 reserved-purpose suffixes plus common non-routable
+# pseudo-host suffixes: matches here are never a live external target, so
+# PII001/NET001/NET004 skip them instead of forcing users to obfuscate real
+# test fixtures. See docs/field-test-roninai-2026-08-25.md §G5/G7.
+RESERVED_SUFFIX_RE = re.compile(
+    r"(?i)\.(test|example|localhost|invalid|local|ipc|internal)\b"
+)
+
 
 def is_comment(line: str, ext: str) -> bool:
     """Check if a line looks like a comment in the given file type."""
@@ -129,6 +137,29 @@ RULES = [
         patterns=_r(r"\bAIza[0-9A-Za-z_\-]{35}\b"),
         remediation="Restrict or regenerate the key in Google Cloud Console.",
     ),
+    Rule(
+        id="SEC008", name="Credentialed Connection String", severity="CRITICAL",
+        controls=("CC6.1",),
+        patterns=_r(
+            r"\b\w{2,15}://[^/\s:@'\"]+:([^/\s@'\"]{4,})@[^/\s'\"]+"
+        ),
+        value_group=1,
+        extensions=frozenset(CODE_EXTENSIONS | CONFIG_EXTENSIONS) - frozenset({".lock"}),
+        remediation="Never embed credentials in a connection string; inject the "
+                    "password via environment variable or secret store and build "
+                    "the URI at runtime. Evidence: docs/field-test-roninai-2026-08-25.md §G1.",
+    ),
+    Rule(
+        id="SEC009", name="Modern Secret Token Shape", severity="CRITICAL",
+        controls=("CC6.1",),
+        patterns=_r(
+            r"\bsk-(?:proj|svcacct|ant)-[A-Za-z0-9_-]{20,}\b",  # OpenAI project/service, Anthropic
+            r"\bsk-ant-(?:api03|admin01)-[A-Za-z0-9_-]{20,}\b",  # Anthropic (explicit prefix families)
+            r"\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{10,}\b",  # raw JWT
+        ),
+        remediation="Revoke the token at its issuing provider and load it from a "
+                    "secret store at runtime. Evidence: docs/field-test-roninai-2026-08-25.md §G8.",
+    ),
     # ---------------- Least privilege / IAM (CC6.1, CC6.3) ----------------
     Rule(
         id="IAM001", name="Wildcard IAM Permissions", severity="CRITICAL",
@@ -163,6 +194,7 @@ RULES = [
         controls=("CC6.7",),
         patterns=_r(r"\bhttp://(?!localhost|127\.0\.0\.1)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b"),
         extensions=frozenset(IAC_EXTENSIONS),
+        check_reserved_suffix=True,
         remediation="Enforce HTTPS or secure protocol equivalents in IaC templates.",
     ),
     Rule(
@@ -171,9 +203,13 @@ RULES = [
         patterns=_r(r"verify\s*=\s*False\b",
                     r"rejectUnauthorized\s*:\s*false\b",
                     r"InsecureRequestWarning",  # soc2-ignore: detection pattern text, not a call
-                    r"disable_ssl_certificate_validation\s*=\s*True"),
+                    r"disable_ssl_certificate_validation\s*=\s*True",
+                    r"danger_accept_invalid_certs\s*\(\s*true\s*\)",  # Rust: reqwest
+                    r"SslVerifyMode::NONE\b",  # Rust: native-tls / openssl-rs  # soc2-ignore: detection pattern text, not a call
+                    r"InsecureSkipVerify\s*:\s*true\b"),  # Go: crypto/tls
         extensions=frozenset(CODE_EXTENSIONS),
-        remediation="Enforce SSL/TLS certificate verification; disabling it allows MitM attacks.",
+        remediation="Enforce SSL/TLS certificate verification; disabling it allows MitM attacks. "
+                    "Evidence for the Rust/Go patterns: docs/field-test-searchtool-2026-09-02.md §G16.",
     ),
     Rule(
         id="NET003", name="World-Open Ingress (Security Group)", severity="HIGH",
@@ -187,13 +223,17 @@ RULES = [
         controls=("CC6.7",),
         patterns=_r(r"\bhttp://(?!localhost|127\.0\.0\.1)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b"),
         extensions=frozenset(CODE_EXTENSIONS),
+        check_reserved_suffix=True,
         remediation="Enforce HTTPS or secure protocol equivalents in application source code.",
     ),
     # ---------------- Secure SDLC (CC8.1) ----------------
     Rule(
         id="SDLC001", name="Dangerous Function Use (eval/exec)", severity="HIGH",
         controls=("CC8.1",),
-        patterns=_r(r"\beval\([^)]*\)", r"\bexec\([^)]*\)"),
+        # (?<!\.) excludes receiver-shaped calls (`compiledRegex.exec(...)`,
+        # a JS/TS RegExp stdlib method, not the dangerous global eval/exec) —
+        # see docs/field-test-roninai-2026-08-25.md §G6.
+        patterns=_r(r"(?<!\.)\beval\([^)]*\)", r"(?<!\.)\bexec\([^)]*\)"),
         extensions=frozenset(CODE_EXTENSIONS),
         remediation="Avoid eval/exec on dynamic inputs; use parser libraries or structured data formats.",
     ),
@@ -206,12 +246,55 @@ RULES = [
         extensions=frozenset(CODE_EXTENSIONS),
         remediation="Use parameterized queries / bind variables; never concatenate raw variables into SQL.",
     ),
+    Rule(
+        id="SDLC003", name="Dynamic Process/Command Construction", severity="HIGH",
+        controls=("CC8.1",),
+        patterns=_r(
+            r"subprocess\.\w+\([^)]*shell\s*=\s*True",  # Python
+            r"child_process\.exec\(\s*[^,'\")\s][^,)]*\+",  # Node: exec + concat  # soc2-ignore: detection pattern text, not a call
+            r"child_process\.exec\(\s*(?:f|`)[^)]*\$\{",  # Node: exec template literal  # soc2-ignore: detection pattern text, not a call
+            r"os/exec\.Command\([^)]*\+",  # Go: exec.Command(x + y)
+            r"Command::new\([^)]*format!",  # Rust: Command::new + format!  # soc2-ignore: detection pattern text, not a call
+        ),
+        extensions=frozenset(CODE_EXTENSIONS),
+        remediation="Never build a shell/process invocation by concatenating dynamic "
+                    "input; pass arguments as a discrete array and avoid shell=True / "
+                    "a shell intermediary. Evidence: docs/field-test-searchtool-2026-09-02.md §G13.",
+    ),
+    Rule(
+        id="SDLC004", name="Unsafe/Low-Level Memory Operation", severity="LOW",
+        controls=("CC8.1",),
+        patterns=_r(r"\bunsafe\s*\{", r"\bunsafe\s+fn\b", r"\bmem::transmute\b",
+                    r"\bstd::mem::transmute\b"),
+        extensions=frozenset({".rs"}),
+        remediation="`unsafe` disables Rust's borrow/type-safety guarantees for this "
+                    "block — confirm the safety invariant is documented and reviewed, "
+                    "not that it must be removed. Evidence: "
+                    "docs/field-test-searchtool-2026-09-02.md §G12 (9 unverified unsafe "
+                    "blocks found with zero prior signal from this scanner).",
+    ),
+    Rule(
+        id="SDLC005", name="Privileged/Insecure Container Config", severity="HIGH",
+        controls=("CC6.1", "CC8.1"),
+        patterns=_r(
+            r"(?i)\bprivileged\s*:\s*true\b",
+            r"/var/run/docker\.sock",
+            r"(?i)^\s*image\s*:\s*[^\s]+:latest\b",
+            r"(?i)\buser\s*:\s*[\"']?0[\"']?\s*$",
+        ),
+        extensions=frozenset({".yml", ".yaml"}),
+        filenames=frozenset({"dockerfile"}),
+        remediation="Avoid privileged containers, host Docker-socket mounts, floating "
+                    "`:latest` tags, and root-user containers. "
+                    "Evidence: docs/field-test-roninai-2026-08-25.md §G9.",
+    ),
     # ---------------- PII & privacy (CC6.1) ----------------
     Rule(
         id="PII001", name="PII in Logs or Code", severity="HIGH",
         controls=("CC7.2",),
         patterns=_r(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b", # Email
                     r"\b\d{3}-\d{2}-\d{4}\b"), # SSN (US)
+        check_reserved_suffix=True,
         remediation="Ensure PII is never hardcoded or logged; use unique identifiers and scrub sensitive data.",
     ),
     Rule(

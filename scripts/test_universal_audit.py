@@ -45,8 +45,9 @@ network_targets: []
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
 
+    @patch("auditor.scanners._tool_available", return_value=True)
     @patch("subprocess.run")
-    def test_run_trivy(self, mock_run):
+    def test_run_trivy(self, mock_run, mock_available):
         # Setup mock trivy output
         mock_result = MagicMock()
         mock_result.stdout = json.dumps({
@@ -67,16 +68,63 @@ network_targets: []
             ]
         })
         mock_run.return_value = mock_result
-        
+
         auditor = universal_audit.UniversalAuditor(self.root, self.config_path)
         auditor.run_trivy()
-        
+
         self.assertEqual(len(auditor.findings), 1)
         finding = auditor.findings[0]
         self.assertEqual(finding.tool, "Trivy")
         self.assertEqual(finding.rule_id, "CVE-2023-0001")
         self.assertEqual(finding.severity, "HIGH")
         self.assertIn("requests", finding.name)
+
+        # R-034: cmd is already a list - shell=True must not be passed (on
+        # POSIX it would only execute cmd[0] via the shell, silently dropping
+        # the rest of the arguments).
+        _, call_kwargs = mock_run.call_args
+        self.assertNotIn("shell", call_kwargs)
+
+    @patch("auditor.scanners._tool_available", return_value=False)
+    @patch("subprocess.run")
+    def test_run_trivy_skips_when_binary_missing(self, mock_run, mock_available):
+        # R-035: a missing external engine must not be silently identical to
+        # "ran and found nothing" - it should skip without invoking subprocess.
+        auditor = universal_audit.UniversalAuditor(self.root, self.config_path)
+        auditor.run_trivy()
+
+        self.assertEqual(auditor.findings, [])
+        mock_run.assert_not_called()
+
+    def test_engine_availability_reported(self):
+        import auditor.scanners as scanners
+        availability = scanners.engine_availability()
+        self.assertEqual(set(availability.keys()), {"checkov", "semgrep", "trivy"})
+        self.assertTrue(all(isinstance(v, bool) for v in availability.values()))
+
+        report = universal_audit.UniversalAuditor(self.root, self.config_path).generate_report("json")
+        payload = json.loads(report)
+        self.assertIn("engine_availability", payload)
+
+    def test_network_audit_skips_unmodified_placeholder_targets(self):
+        # R-036: the shipped config default (example.com placeholders) must
+        # not be silently scanned as if it were a real, user-chosen target.
+        auditor = universal_audit.UniversalAuditor(self.root, self.config_path)
+        auditor.run_network_audit([
+            "https://example.com", "https://api.example.com/health",
+        ])
+        self.assertEqual(auditor.findings, [])
+
+    @patch("requests.get")
+    def test_network_audit_scans_real_override_targets(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.headers = {}
+        mock_get.return_value = mock_resp
+
+        auditor = universal_audit.UniversalAuditor(self.root, self.config_path)
+        auditor.run_network_audit(["https://real-target.internal.example.org"])
+
+        self.assertTrue(len(auditor.findings) > 0)
 
     @patch("requests.post")
     def test_run_dependency_audit_requirements(self, mock_post):

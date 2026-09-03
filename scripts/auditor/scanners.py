@@ -2,6 +2,7 @@ import os
 import re
 import bisect
 import fnmatch
+import shutil
 import subprocess
 import json
 import sys
@@ -9,7 +10,8 @@ from typing import List, Any
 from .models import Finding, Rule, UnifiedFinding
 from .rules import (
     RULES, SKIP_DIRS, SKIP_FILES, SKIP_EXTENSIONS, MAX_FILE_BYTES,
-    PLACEHOLDER_RE, TEST_PATH_RE, SUPPRESS_TOKEN, is_comment, downgrade
+    PLACEHOLDER_RE, RESERVED_SUFFIX_RE, TEST_PATH_RE, SUPPRESS_TOKEN,
+    is_comment, downgrade
 )
 
 def is_binary(sample: bytes) -> bool:
@@ -60,6 +62,7 @@ def scan_file(path: str, rel: str) -> list:
         return []
 
     ext = os.path.splitext(path)[1].lower()
+    basename = os.path.basename(path).lower()
     line_starts = [0]
     for m in re.finditer(r"\n", content):
         line_starts.append(m.end())
@@ -67,10 +70,18 @@ def scan_file(path: str, rel: str) -> list:
 
     findings = []
     for rule in RULES:
-        if rule.extensions and ext not in rule.extensions:
+        ext_match = not rule.extensions or ext in rule.extensions
+        # Extension-less files (Dockerfile, Dockerfile.dev, ...) match on
+        # basename instead - see models.py Rule.filenames.
+        name_match = bool(rule.filenames) and any(
+            basename == fn or basename.startswith(fn + ".") for fn in rule.filenames
+        )
+        if not (ext_match or name_match):
             continue
         for pattern in rule.patterns:
             for match in pattern.finditer(content):
+                if rule.check_reserved_suffix and RESERVED_SUFFIX_RE.search(match.group(0)):
+                    continue
                 if rule.value_group:
                     value = match.group(rule.value_group) or ""
                     if PLACEHOLDER_RE.search(value):
@@ -102,20 +113,46 @@ def scan_file(path: str, rel: str) -> list:
     return findings
 
 
+def _tool_available(name: str) -> bool:
+    return shutil.which(name) is not None
+
+
+def engine_availability() -> dict:
+    """Which external scanner binaries are actually on PATH right now.
+
+    subprocess.run() doesn't raise on a missing executable when the command
+    is invoked without shell=True and produces no stdout either way, so a
+    missing tool is otherwise indistinguishable from "0 findings" in the
+    report - this makes that distinction explicit (R-035).
+    """
+    return {
+        "checkov": _tool_available("checkov"),
+        "semgrep": _tool_available("semgrep"),
+        "trivy": _tool_available("trivy"),
+    }
+
+
 # --- Checkov Scanner ---
 def run_checkov(target_dir: str, conf: dict, mapping_data: dict) -> List[UnifiedFinding]:
     if not conf.get("enabled"): return []
+    if not _tool_available("checkov"):
+        print("Checkov not installed - skipping (external engine unavailable)", file=sys.stderr)
+        return []
     print("Running Checkov (Local OSS Mode)...", file=sys.stderr)
     findings = []
     try:
         cmd = ["checkov", "-d", target_dir, "--output", "json", "--quiet"]
         if conf.get("soft_fail"): cmd.append("--soft-fail")
-        
+
         env = os.environ.copy()
         env.pop("PRISMA_API_KEY", None)
         env.pop("BC_API_KEY", None)
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, shell=True, encoding='utf-8', errors='ignore', env=env)
+
+        # No shell=True: cmd is already a list, and shell=True with a list
+        # argument only executes cmd[0] via the shell on POSIX (the rest
+        # become the shell's own $1, $2... rather than checkov's argv) -
+        # silently broken on POSIX regardless of whether checkov is present.
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore', env=env)
         if not result.stdout.strip():
             return []
 
@@ -162,17 +199,20 @@ def run_checkov(target_dir: str, conf: dict, mapping_data: dict) -> List[Unified
 # --- Semgrep Scanner ---
 def run_semgrep(target_dir: str, conf: dict, mapping_data: dict) -> List[UnifiedFinding]:
     if not conf.get("enabled"): return []
+    if not _tool_available("semgrep"):
+        print("Semgrep not installed - skipping (external engine unavailable)", file=sys.stderr)
+        return []
     print("Running Semgrep (Local OSS Mode)...", file=sys.stderr)
     findings = []
     try:
         cmd = ["semgrep", "--json", target_dir]
         for cfg in conf.get("config", []):
             cmd.extend(["--config", cfg])
-        
+
         env = os.environ.copy()
         env.pop("SEMGREP_APP_TOKEN", None)
 
-        result = subprocess.run(cmd, capture_output=True, text=True, shell=True, encoding='utf-8', errors='ignore', env=env)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore', env=env)
         if not result.stdout.strip():
             return []
 
@@ -205,11 +245,14 @@ def run_semgrep(target_dir: str, conf: dict, mapping_data: dict) -> List[Unified
 # --- Trivy Scanner ---
 def run_trivy(target_dir: str, conf: dict, mapping_data: dict) -> List[UnifiedFinding]:
     if not conf.get("enabled"): return []
+    if not _tool_available("trivy"):
+        print("Trivy not installed - skipping (external engine unavailable)", file=sys.stderr)
+        return []
     print("Running Trivy (Local OSS Mode)...", file=sys.stderr)
     findings = []
     try:
         cmd = ["trivy", "fs", "--format", "json", target_dir]
-        result = subprocess.run(cmd, capture_output=True, text=True, shell=True, encoding='utf-8', errors='ignore')
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
         if not result.stdout.strip():
             return []
         
@@ -328,8 +371,26 @@ def _query_osv(package_name: str, version: str, ecosystem: str, file_path: str, 
 
 
 # --- Network DAST Scanner ---
+# config/compliance_config.yaml ships with these as illustrative defaults, not
+# real targets - scanning them silently (indistinguishable from "user
+# configured example.com on purpose") was R-036. Treat an unmodified default
+# list as "not configured" rather than a real audit target.
+PLACEHOLDER_NETWORK_TARGETS = frozenset({
+    "https://example.com",
+    "https://api.example.com/health",
+})
+
+
 def run_network_audit(targets: list, mapping_data: dict) -> List[UnifiedFinding]:
     if not targets: return []
+    if set(targets) <= PLACEHOLDER_NETWORK_TARGETS:
+        print(
+            "Network audit skipped: config/compliance_config.yaml's "
+            "network_targets is still the placeholder example.com default - "
+            "set real targets (or pass --network-targets) to run DAST checks.",
+            file=sys.stderr,
+        )
+        return []
     print("Running Network/API DAST Checks...", file=sys.stderr)
     import requests
     

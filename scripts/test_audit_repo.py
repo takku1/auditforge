@@ -98,11 +98,32 @@ class TestDetections(AuditFixture):
 
     def test_http_url_in_code_but_not_localhost(self):
         self.write("app/api.ts",
-                   'const a = "http://api.example.com/v1";\n'
+                   'const a = "http://api.acmewidgets.io/v1";\n'
                    'const b = "http://localhost:3000";\n')
         report = self.audit()
         net004 = [f for f in report["findings"] if f.rule.id == "NET004"]
         self.assertEqual(len(net004), 1)
+
+    def test_pii_email_flagged_but_reserved_suffix_exempt(self):
+        self.write("app/users.py",
+                   'real = "jane.doe@acmewidgets.io"\n'
+                   'fixture_a = "dev@localhost"\n'
+                   'fixture_b = "s3cret@cache.example"\n')
+        report = self.audit()
+        pii = [f for f in report["findings"] if f.rule.id == "PII001"]
+        self.assertEqual(len(pii), 1)
+        self.assertIn("jane.doe@acmewidgets.io", pii[0].snippet)
+
+    def test_http_url_reserved_suffix_exempt(self):
+        # RFC 2606/6761 reserved-purpose and non-routable pseudo-host
+        # suffixes are never a live external target - see
+        # docs/field-test-roninai-2026-08-25.md §G5/G7 (R-011).
+        self.write("app/api.ts",
+                   'const a = "http://api.example.com/v1";\n'
+                   'const b = "http://svc.test/health";\n'
+                   'const c = "http://thing.internal/ping";\n')
+        report = self.audit()
+        self.assertEqual([f for f in report["findings"] if f.rule.id == "NET004"], [])
 
 
 class TestNoiseControls(AuditFixture):
@@ -129,7 +150,7 @@ class TestNoiseControls(AuditFixture):
         self.assertEqual(report["summary"]["total"], 0)
 
     def test_min_severity_filter(self):
-        self.write("app/api.ts", 'const a = "http://api.example.com";\n')  # MEDIUM
+        self.write("app/api.ts", 'const a = "http://api.acmewidgets.io";\n')  # MEDIUM
         report = self.audit(min_severity="HIGH")
         self.assertEqual(report["summary"]["total"], 0)
 

@@ -1,12 +1,49 @@
 import json
+import os
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Optional
 from .rules import SEVERITIES, RULES_BY_ID
 
 ANSI = {
     "CRITICAL": "\x1b[1;31m", "HIGH": "\x1b[31m",
     "MEDIUM": "\x1b[33m", "LOW": "\x1b[36m", "reset": "\x1b[0m",
 }
+
+_CROSSWALK_CACHE = None
+
+
+def _load_crosswalk() -> dict:
+    """framework_mappings.json's rule-id -> [\"Framework:ref\", ...] crosswalk,
+    cached after first load. Missing/unreadable file degrades to {} rather
+    than failing - audit_repo.py stays usable standalone either way.
+    """
+    global _CROSSWALK_CACHE
+    if _CROSSWALK_CACHE is None:
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "framework_mappings.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                _CROSSWALK_CACHE = json.load(f).get("mappings", {})
+        except (OSError, json.JSONDecodeError):
+            _CROSSWALK_CACHE = {}
+    return _CROSSWALK_CACHE
+
+
+def rule_frameworks(rule) -> list:
+    """A rule's baked-in SOC2 controls plus any cross-framework crosswalk
+    entries for its rule ID from framework_mappings.json. That crosswalk data
+    existed but never reached audit_repo.py's own output before this - only
+    the universal_audit.py orchestrator path consulted it. See
+    docs/gap-status-2026-09-02-update.md §4.
+    """
+    # Prefix the rule's own SOC2 refs to match the crosswalk's "Framework:ref"
+    # shape, so a rule with both a native "CC6.1" and a crosswalked
+    # "SOC2:CC6.1" doesn't show the same fact twice in two notations.
+    merged = [f"SOC2:{c}" for c in rule.controls]
+    for extra in _load_crosswalk().get(rule.id, []):
+        if extra not in merged:
+            merged.append(extra)
+    return merged
 
 
 def print_text(report: dict, use_color: bool):
@@ -20,10 +57,10 @@ def print_text(report: dict, use_color: bool):
     for f in report["findings"]:
         ctx = " (test/example context)" if f.in_test_context else ""
         print(f"{paint(f.severity):<22} {f.rule.id} {f.rule.name}"
-              f" [{', '.join(f.rule.controls)}]{ctx}")
+              f" [{', '.join(rule_frameworks(f.rule))}]{ctx}")
         print(f"    {f.file}:{f.line}")
         print(f"    {f.snippet}")
-        print(f"    Fix: {f.rule.remediation}")
+        print(f"    Fix: {f.effective_remediation}")
     s = report["summary"]
     print(f"\nAudit complete: {s['total']} findings "
           f"(Critical: {s['CRITICAL']} | High: {s['HIGH']} | "
@@ -32,7 +69,12 @@ def print_text(report: dict, use_color: bool):
 
 def to_json(report: dict) -> str:
     out = dict(report)
-    out["findings"] = [f.to_dict() for f in report["findings"]]
+    findings = []
+    for f in report["findings"]:
+        d = f.to_dict()
+        d["soc2_controls"] = rule_frameworks(f.rule)
+        findings.append(d)
+    out["findings"] = findings
     return json.dumps(out, indent=2)
 
 
@@ -54,14 +96,14 @@ def to_sarif(report: dict) -> str:
                     "shortDescription": {"text": RULES_BY_ID[rid].name},
                     "help": {"text": RULES_BY_ID[rid].remediation},
                     "properties": {
-                        "soc2_controls": list(RULES_BY_ID[rid].controls),
+                        "soc2_controls": rule_frameworks(RULES_BY_ID[rid]),
                     },
                 } for rid in rules_used],
             }},
             "results": [{
                 "ruleId": f.rule.id,
                 "level": sarif_level[f.severity],
-                "message": {"text": f"{f.rule.name}: {f.rule.remediation}"},
+                "message": {"text": f"{f.rule.name}: {f.effective_remediation}"},
                 "partialFingerprints": {"soc2AuditFingerprint": f.fingerprint},
                 "locations": [{
                     "physicalLocation": {
@@ -97,14 +139,34 @@ def to_markdown(report: dict) -> str:
         for f in group:
             snippet = f.snippet.replace("|", "\\|").replace("`", "'")
             lines.append(f"| {f.rule.id} {f.rule.name} "
-                         f"| {', '.join(f.rule.controls)} "
+                         f"| {', '.join(rule_frameworks(f.rule))} "
                          f"| `{f.file}:{f.line}` | `{snippet}` |")
         lines.append("")
     return "\n".join(lines)
 
 
 # Reporting functions for universal_audit
-def to_universal_markdown(findings: list, mapping_data: dict, metadata_data: dict, summary: dict) -> str:
+def _availability_lines(availability: dict) -> list:
+    if not availability:
+        return []
+    installed = sum(1 for v in availability.values() if v)
+    lines = [
+        "## External Engine Availability",
+        f"{installed}/{len(availability)} external engines available on this "
+        "host - findings from an unavailable engine are absent because it "
+        "never ran, not because the scan came back clean.",
+        "",
+        "| Engine | Installed |",
+        "| --- | --- |",
+    ]
+    for name, ok in availability.items():
+        lines.append(f"| {name} | {'yes' if ok else 'no'} |")
+    lines.append("")
+    return lines
+
+
+def to_universal_markdown(findings: list, mapping_data: dict, metadata_data: dict, summary: dict,
+                           availability: Optional[dict] = None) -> str:
     lines = [
         "# AuditForge - Universal Compliance & Security Audit Report",
         f"Generated: {datetime.now(timezone.utc).isoformat()}",
@@ -120,6 +182,7 @@ def to_universal_markdown(findings: list, mapping_data: dict, metadata_data: dic
         f"| MEDIUM | {summary['medium']} |",
         f"| LOW | {summary['low']} |",
         "",
+        *_availability_lines(availability or {}),
         "## Findings Matrix",
         "| Tool | Rule | File | Frameworks & Controls | Severity |",
         "| --- | --- | --- | --- | --- |"
@@ -142,5 +205,9 @@ def to_universal_markdown(findings: list, mapping_data: dict, metadata_data: dic
     return "\n".join(lines)
 
 
-def to_universal_json(findings: list, summary: dict) -> str:
-    return json.dumps({"summary": summary, "findings": [f.__dict__ for f in findings]}, indent=2)
+def to_universal_json(findings: list, summary: dict, availability: Optional[dict] = None) -> str:
+    return json.dumps({
+        "summary": summary,
+        "engine_availability": availability or {},
+        "findings": [f.__dict__ for f in findings],
+    }, indent=2)
