@@ -17,6 +17,12 @@ in sync and indexed into one queryable control catalog.
 - **`scripts/sync_frameworks.py`** — regenerates `scripts/framework_metadata.json`,
   a derived index of 300+ framework families / 40k+ controls, from the
   read-only knowledge-base clones below.
+- **`scripts/build_document_catalog.py`** — builds `scripts/document_catalog.db`,
+  a real SQLite database of the ~300 tracked standards themselves (name,
+  issuing body, genuine official source URL, redistribution-rights
+  classification) — not templates, not crosswalk references. Can also fetch
+  and locally cache the raw document for anything classified
+  `public_domain`/`free_to_access`; refuses to fetch anything else.
 - **`scripts/build_rulepack.py`** — a separate tool that emits a host-posture
   rule pack consumed by a sibling project; unrelated to the repo scanner above
   beyond sharing a control-tagging convention.
@@ -34,6 +40,13 @@ python scripts/audit_repo.py <path-to-target> --fail-on HIGH
 
 # Regenerate the framework control index after a KB update
 python scripts/sync_frameworks.py
+
+# Rebuild the document catalog (metadata + real source URLs, no fetching)
+python scripts/build_document_catalog.py
+
+# Cache the raw text of specific documents (only ever fetches
+# public_domain/free_to_access - refuses anything else)
+python scripts/build_document_catalog.py --skip-build --cache <FDI> [<FDI> ...]
 
 # Run the test suite
 python -m pytest scripts/

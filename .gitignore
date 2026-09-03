@@ -25,6 +25,13 @@ __pycache__/
 *.sarif
 *.baseline
 
+# cached raw documents from scripts/build_document_catalog.py --cache -
+# even "free_to_access" sources often restrict redistribution (see
+# document_catalog.db's license_note column), so these stay local-only.
+# document_catalog.db itself (metadata + URLs, no document bodies) is
+# tracked, same convention as framework_metadata.json.
+scripts/document_cache/
+
 # secrets
 .env
 

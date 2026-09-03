@@ -8,14 +8,30 @@ sibling RoninAI rule-pack builder (`scripts/build_rulepack.py`) are newer and
 still growing coverage.
 
 ## Active Focus
-Closing the gap backlog from two field tests (roninai 2026-08-25, searchtool
-2026-09-02 — see `docs/field-test-*.md`): the R-008..R-024 rule-engine gaps
-(credentialed connection strings, git tracked/untracked awareness, history
-scanning, compiled-language danger idioms, etc.) — see ROADMAP.md. The
-framework-coverage audit (`docs/framework-coverage-audit-2026-09-02.md`) is
-done: `framework_metadata.json` now indexes 303 framework families / 42,082
-controls (up from 11/2075). Remaining open item there is R-027 (HITRUST CSF,
-FFIEC CAT, SOC 1/SSAE 18 — genuine blind spots with no local source yet).
+Most of the R-008..R-024 rule-engine gaps from the two field tests (roninai
+2026-08-25, searchtool 2026-09-02 — see `docs/field-test-*.md`) are closed;
+10 items remain in ROADMAP.md's Ready table (R-007, R-010, R-013, R-014,
+R-017, R-021, R-023, R-024, R-027, R-030, R-040), none blocking. The
+framework-coverage audit is done: `framework_metadata.json` indexes 303
+framework families / 42,082 controls, and that crosswalk now actually reaches
+`audit_repo.py`'s own output (R-037 — it previously only reached the
+orchestrator path). CI, LICENSE, README, and a real document catalog
+(`scripts/document_catalog.db`, R-039) were added. Remaining known gaps:
+R-027 (HITRUST CSF/FFIEC CAT/SOC 1 — no local source exists) and R-040 (bulk
+document caching — only 1 of ~166 eligible documents cached as a live proof).
+
+## New capability: the document catalog
+`scripts/build_document_catalog.py` builds `scripts/document_catalog.db` — a
+SQLite database of the ~300 tracked standards *themselves* (not their
+parsed controls, and not the generic policy-wording templates in
+`comply`/`jupiterone-policies`): real name, issuing body, genuine official
+source URL, and a conservative redistribution-rights classification
+(`public_domain` / `free_to_access` / `copyrighted_registration_required` /
+`unknown`, defaulting to the most restrictive when unverified). It can fetch
+and locally cache the raw document (`scripts/document_cache/`, gitignored)
+for anything classified `public_domain` or `free_to_access` — and refuses,
+with zero network call, for anything else. The `.db` itself is tracked in
+git like `framework_metadata.json`; the cached document bodies are not.
 
 ## Architecture Summary
 `scripts/audit_repo.py` is a dependency-free regex scanner that maps findings
