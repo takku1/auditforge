@@ -158,5 +158,59 @@ network_targets: []
         self.assertEqual(finding.rule_id, "GHSA-c4g2-mg2v-rh48")
         self.assertEqual(finding.severity, "HIGH")
 
+    @patch("requests.post")
+    def test_run_dependency_audit_kev_enrichment_bumps_severity(self, mock_post):
+        import vuln_intel  # noqa: E402 - same sys.path trick as scanners.py's lazy import
+
+        req_path = os.path.join(self.root, "requirements.txt")
+        with open(req_path, "w", encoding="utf-8") as f:
+            f.write("pan-os-fake==1.0.0\n")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "vulns": [
+                {
+                    "id": "GHSA-fake-0000",
+                    "aliases": ["CVE-2024-3400"],
+                    "summary": "Command injection",
+                    "database_specific": {"severity": "HIGH"},
+                }
+            ]
+        }
+        mock_post.return_value = mock_response
+
+        with patch.object(vuln_intel, "check_kev", return_value={
+            "dateAdded": "2024-04-12", "knownRansomwareCampaignUse": "Known",
+        }):
+            auditor = universal_audit.UniversalAuditor(self.root, self.config_path)
+            auditor.run_dependency_audit()
+
+        finding = auditor.findings[0]
+        self.assertEqual(finding.severity, "CRITICAL")
+        self.assertIn("CISA KEV", finding.remediation)
+        self.assertIn("ransomware", finding.remediation.lower())
+
+    @patch("requests.post")
+    def test_run_dependency_audit_no_cve_alias_skips_enrichment(self, mock_post):
+        req_path = os.path.join(self.root, "requirements.txt")
+        with open(req_path, "w", encoding="utf-8") as f:
+            f.write("somepkg==1.0.0\n")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "vulns": [{"id": "GHSA-no-cve-0000", "summary": "x", "database_specific": {"severity": "HIGH"}}]
+        }
+        mock_post.return_value = mock_response
+
+        auditor = universal_audit.UniversalAuditor(self.root, self.config_path)
+        auditor.run_dependency_audit()
+
+        finding = auditor.findings[0]
+        self.assertEqual(finding.severity, "HIGH")
+        self.assertNotIn("CISA KEV", finding.remediation)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

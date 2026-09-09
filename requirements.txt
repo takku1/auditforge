@@ -3,3 +3,11 @@ requests>=2.31
 python-dotenv>=1.0
 openpyxl>=3.1
 pytest>=8.0
+
+# Agentic layer: MCP server, local vector search, local embeddings, PDF text
+# extraction for the document-cache indexer. Install into a project-local
+# .venv, never a global/system Python (see CLAUDE.md Workspace Layout).
+mcp>=1.29
+sqlite-vec>=0.1.9
+sentence-transformers>=6.0
+pypdf>=5.0

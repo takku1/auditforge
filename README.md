@@ -27,10 +27,27 @@ in sync and indexed into one queryable control catalog.
   rule pack consumed by a sibling project; unrelated to the repo scanner above
   beyond sharing a control-tagging convention.
 
+### Agentic layer
+
+- **`scripts/build_vector_index.py`** — builds `scripts/vector_index.db`, a
+  local sqlite-vec semantic-search index over every control and every cached
+  document, using a local CPU embedding model (no external API, no GPU).
+- **`scripts/mcp_server.py`** — an MCP server exposing the knowledge base
+  (semantic search, exact lookup, framework crosswalk, the audit scanner,
+  and free CISA KEV/EPSS/NVD vulnerability intelligence) as agent tools.
+  Registered automatically for Claude Code via `.mcp.json`.
+- **`scripts/vuln_intel.py`** — free, no-API-key client for CISA's Known
+  Exploited Vulnerabilities catalog, FIRST.org's EPSS scores, and NVD CVE
+  detail, with a local TTL cache.
+- **`.claude/skills/auditforge/SKILL.md`** — the same capability packaged as
+  a standalone skill with CLI fallbacks, for sessions without the MCP server
+  connected.
+
 ## Quick start
 
 ```bash
-pip install -r requirements.txt
+# Core auditor/knowledge-base (no agentic-layer deps required)
+pip install PyYAML requests python-dotenv openpyxl pytest
 
 # Pull every knowledge-base clone to latest (first run: clones them)
 pwsh scripts/update_sources.ps1        # Windows PowerShell 5.1+ / pwsh
@@ -47,10 +64,33 @@ python scripts/build_document_catalog.py
 # Cache the raw text of specific documents (only ever fetches
 # public_domain/free_to_access - refuses anything else)
 python scripts/build_document_catalog.py --skip-build --cache <FDI> [<FDI> ...]
+# ...or bulk-cache every eligible not-yet-cached document:
+python scripts/build_document_catalog.py --skip-build --cache-all
 
 # Run the test suite
 python -m pytest scripts/
 ```
+
+### Agentic layer setup
+
+The MCP server and vector index need extra deps (`mcp`, `sentence-transformers`,
+`sqlite-vec`, `pypdf`) — install these into a **project-local venv**, never a
+global/system Python (they can pin dependency versions that conflict with
+unrelated projects on the same machine):
+
+```bash
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements.txt   # Windows
+# .venv/bin/python -m pip install -r requirements.txt          # macOS/Linux
+
+# Build the semantic index (run after any framework_metadata.json /
+# document_catalog.db update)
+.venv/Scripts/python.exe scripts/build_vector_index.py
+```
+
+Claude Code auto-detects `.mcp.json` and launches `scripts/mcp_server.py`
+using that venv's interpreter. See `.claude/skills/auditforge/SKILL.md` for
+the full tool list and CLI equivalents.
 
 ## Project docs
 

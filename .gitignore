@@ -16,6 +16,7 @@ owasp-top10/
 probo/
 secure-controls-framework/
 security-templates/
+fedramp-rules/
 
 # generated / ephemeral
 reports/
@@ -31,9 +32,29 @@ __pycache__/
 # document_catalog.db itself (metadata + URLs, no document bodies) is
 # tracked, same convention as framework_metadata.json.
 scripts/document_cache/
+scripts/document_cache_run.log
+
+# scripts/vector_index.db is DERIVED (regenerate via build_vector_index.py)
+# but, unlike framework_metadata.json/document_catalog.db, it's too large
+# for git (400+MB - embeds chunked text extracted from scripts/document_cache/,
+# which is itself gitignored for redistribution-rights reasons above) and
+# is trivially rebuildable locally in a few minutes.
+scripts/vector_index.db
+
+# vuln_intel.py's local API-response cache (CISA KEV/EPSS/NVD) - ephemeral,
+# TTL'd, regenerates itself on first use.
+scripts/vuln_intel_cache.db
+
+# agentic-layer virtualenv - never commit a venv (see requirements.txt)
+.venv/
+
+# HuggingFace model cache, if pointed here instead of the user profile
+.cache/
 
 # secrets
 .env
 
 # tooling state
 .recurspec/
+.claude-flow/
+.claude/scheduled_tasks.lock

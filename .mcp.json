@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "auditforge": {
+      "command": "${CLAUDE_PROJECT_DIR}/.venv/Scripts/python.exe",
+      "args": ["${CLAUDE_PROJECT_DIR}/scripts/mcp_server.py"]
+    }
+  }
+}

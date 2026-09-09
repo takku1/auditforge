@@ -32,6 +32,7 @@ $sources = [ordered]@{
     'asvs'                      = 'https://github.com/OWASP/ASVS.git'
     'owasp-top10'               = 'https://github.com/OWASP/Top10.git'
     'secure-controls-framework' = 'https://github.com/securecontrolsframework/securecontrolsframework.git'
+    'fedramp-rules'             = 'https://github.com/FedRAMP/rules.git'
     'juice-shop'                = 'https://github.com/juice-shop/juice-shop.git'
 }
 

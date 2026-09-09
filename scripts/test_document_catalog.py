@@ -131,6 +131,83 @@ class TestCacheDocument(unittest.TestCase):
         conn = self._conn_with_row("real-doc", "public_domain")
         self.assertEqual(bdc.cache_document(conn, "does-not-exist"), "not-found")
 
+    @patch("requests.get")
+    def test_flags_small_html_as_suspect_landing_page(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.headers = {"Content-Type": "text/html; charset=utf-8"}
+        mock_resp.content = b"<html><body>Sign in to continue</body></html>"  # tiny, well under 40KB
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        conn = self._conn_with_row("landing-doc", "free_to_access")
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(bdc, "CACHE_DIR", Path(tmp)):
+                result = bdc.cache_document(conn, "landing-doc")
+        self.assertIn("SUSPECT LANDING PAGE", result)
+        # still cached (it's evidence either way), just flagged
+        row = conn.execute("SELECT full_text_cached FROM documents WHERE fdi = ?", ("landing-doc",)).fetchone()
+        self.assertEqual(row[0], 1)
+
+    @patch("requests.get")
+    def test_large_html_not_flagged_as_landing_page(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.headers = {"Content-Type": "text/html; charset=utf-8"}
+        mock_resp.content = b"x" * 50_000  # over the 40KB threshold
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        conn = self._conn_with_row("real-html-doc", "free_to_access")
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(bdc, "CACHE_DIR", Path(tmp)):
+                result = bdc.cache_document(conn, "real-html-doc")
+        self.assertNotIn("SUSPECT", result)
+        self.assertTrue(result.startswith("cached ("))
+
+
+class TestCacheAll(unittest.TestCase):
+    def _conn_with_rows(self, fdis_and_statuses):
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(bdc.SCHEMA)
+        for fdi, status in fdis_and_statuses:
+            conn.execute(
+                "INSERT INTO documents (fdi, name, source_url, catalog_source, license_status) "
+                "VALUES (?, 'x', 'https://example.gov/x.pdf', 'manual', ?)",
+                (fdi, status),
+            )
+        conn.commit()
+        return conn
+
+    def test_only_fetches_eligible_and_uncached(self):
+        conn = self._conn_with_rows([
+            ("eligible-1", "public_domain"),
+            ("eligible-2", "free_to_access"),
+            ("ineligible", "copyrighted_registration_required"),
+        ])
+        with patch.object(bdc, "cache_document", return_value="cached (1 bytes, x)") as mock_cache, \
+             patch.object(bdc.time, "sleep"):
+            tally = bdc.cache_all(conn, delay=0)
+        called_fdis = {call.args[1] for call in mock_cache.call_args_list}
+        self.assertEqual(called_fdis, {"eligible-1", "eligible-2"})
+        self.assertEqual(tally["cached"], 2)
+
+    def test_respects_limit(self):
+        conn = self._conn_with_rows([
+            ("a", "public_domain"), ("b", "public_domain"), ("c", "public_domain"),
+        ])
+        with patch.object(bdc, "cache_document", return_value="cached (1 bytes, x)") as mock_cache, \
+             patch.object(bdc.time, "sleep"):
+            bdc.cache_all(conn, delay=0, limit=2)
+        self.assertEqual(mock_cache.call_count, 2)
+
+    def test_skips_already_cached(self):
+        conn = self._conn_with_rows([("already-done", "public_domain")])
+        conn.execute("UPDATE documents SET full_text_cached = 1 WHERE fdi = 'already-done'")
+        conn.commit()
+        with patch.object(bdc, "cache_document") as mock_cache:
+            tally = bdc.cache_all(conn, delay=0)
+        mock_cache.assert_not_called()
+        self.assertEqual(tally, {})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

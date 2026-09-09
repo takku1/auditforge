@@ -22,7 +22,10 @@ produced here MUST respect the Foundational Mandates below.
   code you write or modify before finishing a task. Run the auditor's own
   tests (`python scripts/test_audit_repo.py`) after changing it.
 - **Dependency Vetting:** Scan for vulnerable dependencies when adding new
-  libraries (`npm audit`, `pip-audit`).
+  libraries (`npm audit`, `pip-audit`). `universal_audit.py`'s OSV scan
+  auto-enriches CVE-aliased findings with CISA KEV/EPSS via
+  `scripts/vuln_intel.py` - a KEV hit means "prioritize this over CVSS
+  severity alone," not just "a vulnerability exists somewhere."
 - **No unsafe patterns:** No `eval`/`exec` on dynamic input, no unsafe
   deserialization (pickle / `yaml.load` without a Loader), no `shell=True`
   with interpolated input, no SQL built by string concatenation.
@@ -55,8 +58,13 @@ Exit 0 = all sources fresh. Any FAILED row: fix or re-run when online.
 | --- | --- |
 | `scripts/` | Project-owned code (auditor, sync, updater) — git-tracked |
 | `config/compliance_config.yaml` | Framework sources + tool configuration |
-| `scripts/framework_metadata.json` | DERIVED control index (~2000 controls, 11 families) - regenerate via `python scripts/sync_frameworks.py`, never hand-edit |
+| `scripts/framework_metadata.json` | DERIVED control index (~42,000 controls, 300+ families) - regenerate via `python scripts/sync_frameworks.py`, never hand-edit |
 | `scripts/framework_mappings.json` | Cross-framework rule mapping source of truth |
+| `scripts/document_catalog.db` | DERIVED SQLite catalog of the standards themselves (name, publisher, source URL, license, cached full text) - regenerate via `python scripts/build_document_catalog.py`, never hand-edit |
+| `scripts/vector_index.db` | DERIVED sqlite-vec semantic index over controls + cached documents - regenerate via `python scripts/build_vector_index.py`, never hand-edit |
+| `scripts/mcp_server.py` | MCP server exposing the knowledge base (control search/crosswalk/lookup, audit_repo, document fetch, CISA KEV/EPSS/NVD vuln intel) as agent tools - registered in `.mcp.json` |
+| `scripts/vuln_intel.py` | Free-API client (CISA KEV, FIRST.org EPSS, NVD) with a local on-disk cache to respect rate limits and avoid re-fetching |
+| `.venv/` | Project-local virtualenv for the agentic-layer deps (`mcp`, `sentence-transformers`, `sqlite-vec`) - never install these into a global/system Python |
 | `reports/` | All generated audit artifacts |
 | `docs/architecture/` | Recurspec contract tree (`recurspec status .`) |
 | `ROADMAP.md` | Sole incomplete-work registry |
@@ -65,7 +73,8 @@ Exit 0 = all sources fresh. Any FAILED row: fix or re-run when online.
 | `compliance-as-code/` | HIPAA / PCI-DSS 4.0.1 / CIS / E8 / STIG control YAML |
 | `asvs/` | OWASP ASVS 5.0 (JSON/CSV/XML) |
 | `owasp-top10/` | OWASP Top 10:2025 (OSIB YAML) |
-| `secure-controls-framework/` | SCF crosswalk xlsx (~120 frameworks; CC BY-ND, internal use) |
+| `secure-controls-framework/` | SCF crosswalk xlsx (~250 focal-document frameworks; CC BY-ND, internal use) |
+| `fedramp-rules/` | FedRAMP 20x consolidated rules (JSON) - Key Security Indicators mapped to NIST 800-53 controls (clone; public domain, US federal work) |
 | `comply/`, `jupiterone-policies/` | Policy wording gold standards (clones) |
 | `probo/`, `comp-ai/`, `opengrc/` | AI-native / self-hosted GRC platforms (clones) |
 | `nist-csf/`, `gdpr-checklist/`, `security-templates/` | Legacy/reference KBs (clones) |

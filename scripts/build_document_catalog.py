@@ -31,6 +31,7 @@ import json
 import re
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -134,6 +135,16 @@ MANUAL_DOCUMENTS = [
         "source_url": "https://attack.mitre.org/matrices/enterprise/",
         "family_key": "ATTACK", "license_status": "free_to_access",
         "license_note": SOURCE_LICENSE["MITRE"][1],
+    },
+    {
+        "fdi": "manual-fedramp-20x-ksi", "name": "FedRAMP 20x Key Security Indicators",
+        "issuing_body": "Federal", "geography": "US",
+        "source_url": "https://www.fedramp.gov/2026/",
+        "family_key": "FEDRAMP20X", "license_status": "public_domain",
+        "license_note": "US federal government work (17 U.S.C. §105); machine-readable "
+                         "source at github.com/FedRAMP/rules (fedramp-consolidated-rules.json). "
+                         "Supersedes the old Rev5 GSA/fedramp-automation baseline-profile repo, "
+                         "which no longer exists (404 as of 2026-09-09, see ROADMAP RF-003).",
     },
 ]
 
@@ -295,7 +306,43 @@ def cache_document(conn: sqlite3.Connection, fdi: str, timeout: int = 20) -> str
         (stored_path, datetime.datetime.now(datetime.timezone.utc).isoformat(), fdi),
     )
     conn.commit()
-    return f"cached ({len(resp.content)} bytes, {content_type or 'unknown type'})"
+
+    # R-040's stated concern: some FDS links are landing pages, not the
+    # document itself. Can't fully verify without a human reading it, but a
+    # tiny HTML response is a strong landing-page signal worth flagging
+    # rather than silently trusting - still cached (it's evidence either
+    # way), just labeled so a bulk run's output is honest about what needs
+    # a manual look.
+    suspect = "html" in content_type and len(resp.content) < 40_000
+    label = "cached, SUSPECT LANDING PAGE - verify manually" if suspect else "cached"
+    return f"{label} ({len(resp.content)} bytes, {content_type or 'unknown type'})"
+
+
+def cache_all(conn: sqlite3.Connection, delay: float = 1.5, limit: int | None = None) -> dict:
+    """Batch-caches every not-yet-cached public_domain/free_to_access document.
+    Verified per-document (R-040's concern: some FDS links are landing pages,
+    not direct files) via a lightweight sanity check on the fetched bytes
+    rather than blind trust in the URL - HTML landing pages are recorded as
+    'landing-page' rather than silently cached as if they were the standard.
+    `delay` seconds between requests is polite-crawling, not a published rate
+    limit (these are ~180 different publishers, not one API).
+    """
+    rows = conn.execute(
+        "SELECT fdi FROM documents WHERE license_status IN ('public_domain','free_to_access') "
+        "AND full_text_cached = 0 ORDER BY fdi"
+    ).fetchall()
+    fdis = [r[0] for r in rows]
+    if limit:
+        fdis = fdis[:limit]
+    tally: dict[str, int] = {}
+    for i, fdi in enumerate(fdis):
+        status = cache_document(conn, fdi)
+        bucket = status.split(" (")[0]
+        tally[bucket] = tally.get(bucket, 0) + 1
+        print(f"[{i + 1}/{len(fdis)}] {fdi}: {status}")
+        if i < len(fdis) - 1:
+            time.sleep(delay)
+    return tally
 
 
 def main() -> int:
@@ -304,6 +351,13 @@ def main() -> int:
     parser.add_argument("--cache", nargs="+", metavar="FDI",
                          help="Fetch and cache the raw document for these FDIs "
                               "(only public_domain/free_to_access are ever fetched)")
+    parser.add_argument("--cache-all", action="store_true",
+                         help="Fetch and cache every not-yet-cached public_domain/"
+                              "free_to_access document (ROADMAP R-040)")
+    parser.add_argument("--limit", type=int, default=None,
+                         help="Cap how many documents --cache-all fetches this run")
+    parser.add_argument("--delay", type=float, default=1.5,
+                         help="Seconds between requests for --cache-all (default 1.5)")
     parser.add_argument("--skip-build", action="store_true",
                          help="Reuse the existing document_catalog.db instead of rebuilding it")
     args = parser.parse_args()
@@ -325,6 +379,9 @@ def main() -> int:
     if args.cache:
         for fdi in args.cache:
             print(f"{fdi}: {cache_document(conn, fdi)}")
+    if args.cache_all:
+        tally = cache_all(conn, delay=args.delay, limit=args.limit)
+        print("cache-all summary:", json.dumps(tally, indent=2))
     conn.close()
     return 0
 

@@ -1,24 +1,51 @@
 # STATUS
 
 ## Current Phase
-Building out the multi-framework knowledge base and the static SOC 2 auditor
-in parallel. Core engine (`scripts/audit_repo.py`) is field-tested and
-stable; framework-metadata indexing (`scripts/sync_frameworks.py`) and the
-sibling RoninAI rule-pack builder (`scripts/build_rulepack.py`) are newer and
-still growing coverage.
+The multi-framework knowledge base and static SOC 2 auditor (Phase 1) are
+stable. Phase 2 — an agentic layer on top of that knowledge base — is now
+live: an MCP server, a local semantic-search index, free vulnerability
+intelligence, and a standalone Claude Code skill, so an AI agent can query
+the ~42k-control knowledge base directly instead of an operator shelling out
+to CLIs and parsing text by hand.
 
 ## Active Focus
-Most of the R-008..R-024 rule-engine gaps from the two field tests (roninai
-2026-08-25, searchtool 2026-09-02 — see `docs/field-test-*.md`) are closed;
-10 items remain in ROADMAP.md's Ready table (R-007, R-010, R-013, R-014,
-R-017, R-021, R-023, R-024, R-027, R-030, R-040), none blocking. The
-framework-coverage audit is done: `framework_metadata.json` indexes 303
-framework families / 42,082 controls, and that crosswalk now actually reaches
-`audit_repo.py`'s own output (R-037 — it previously only reached the
-orchestrator path). CI, LICENSE, README, and a real document catalog
-(`scripts/document_catalog.db`, R-039) were added. Remaining known gaps:
-R-027 (HITRUST CSF/FFIEC CAT/SOC 1 — no local source exists) and R-040 (bulk
-document caching — only 1 of ~166 eligible documents cached as a live proof).
+Framework/auditor-engine work (R-008..R-037) is closed; remaining Ready-table
+items (R-007, R-010, R-013, R-014, R-017, R-021, R-023, R-024, R-030, R-041)
+are non-blocking. This session's focus was the agentic layer, prompted by a
+direct ask to "build the agentic layer... check online to see if we're
+missing any other frameworks... make sure the agentic layer knows how to
+access things quickly in the db":
+- **`scripts/vuln_intel.py`** — free CISA KEV / FIRST.org EPSS / NVD API 2.0
+  client with a local TTL cache (R-042). Answers "is this OSV finding
+  actually being exploited," which OSV alone doesn't.
+- **`scripts/build_vector_index.py` + `scripts/mcp_server.py`** (R-043) —
+  sqlite-vec semantic index (`scripts/vector_index.db`, gitignored/derived,
+  ~42k controls + 154 cached documents' chunked text, `BAAI/bge-small-en-v1.5`
+  local CPU embeddings) behind an MCP server exposing `search_controls`,
+  `get_control`, `list_frameworks`, `crosswalk_rule`, `crosswalk_control`,
+  `search_documents`, `get_document`, `run_audit`, `kev_lookup`,
+  `epss_lookup`, `nvd_lookup`. Registered for Claude Code via `.mcp.json`.
+  Framework-filtered search uses vec0 partition keys (true partitioned KNN,
+  not a post-hoc filter over an unfiltered top-k) — see ROADMAP R-043.
+- **`.claude/skills/auditforge/SKILL.md`** (R-044) — the same capability
+  packaged as a standalone, git-tracked skill with CLI fallbacks, so it works
+  in any session, not only one with the MCP server connected.
+- **Framework coverage, re-checked online**: FedRAMP's old Rev5
+  baseline-profile repo (`GSA/fedramp-automation`) is confirmed gone — real
+  404, verified via `git ls-remote`, not a research artifact. FedRAMP moved
+  to the "20x" Key Security Indicators model; wired in its actual current
+  source (`github.com/FedRAMP/rules`) as 46 new `FEDRAMP20X:*` controls
+  (RF-003, closed). HITRUST CSF re-confirmed still gated (RF unchanged, no
+  false optimism). FFIEC's old CAT tool sunset 2025-08-31 — no longer a
+  framework to track at all (its own replacement guidance points at NIST
+  CSF 2.0 and CIS Controls, both already indexed).
+- **Bulk document caching (R-040)**: 154/167 eligible documents now cached
+  (was 1/167) — 114MB of real regulatory/standards text in
+  `scripts/document_cache/` (gitignored). 13 failures tracked as R-041.
+- **Isolated `.venv/`** (R-045): the agentic-layer deps were briefly
+  installed into the machine's global Python and found to conflict with
+  unrelated projects (`vllm`, `parlant`, `opencompass`) pinned there —
+  reverted, moved to a project-local venv. Never install these globally.
 
 ## New capability: the document catalog
 `scripts/build_document_catalog.py` builds `scripts/document_catalog.db` — a
@@ -47,12 +74,25 @@ ISM, SRG, per-product NIST overlays), and the full Secure Controls Framework
 crosswalk workbook via openpyxl (248 focal-document frameworks - ISO
 27001/27017/27018/27701/42001, GDPR, DORA, NIS2, CMMC 2.0, FedRAMP R5, TISAX,
 SOX, GLBA, NYDFS 500, LGPD, PIPEDA, and ~230 more - each keyed by SCF control
-ID to that framework's mapped clause). Only OWASP Top 10:2025 stays a
-presence-only flag (its OSIB export is a CWE-linkage graph, not a flat
-control list - deliberate, not an oversight). `scripts/build_rulepack.py` is
-a separate tool that emits a host-posture rule pack (`ronin.rulepack/v1`)
-consumed by the sibling RoninAI project, tagged against NIST 800-171, SOC 2,
-and CIS control refs.
+ID to that framework's mapped clause), and FedRAMP 20x's Key Security
+Indicators from `github.com/FedRAMP/rules` (46 indicators, each mapped to its
+NIST 800-53 control IDs). Only OWASP Top 10:2025 stays a presence-only flag
+(its OSIB export is a CWE-linkage graph, not a flat control list -
+deliberate, not an oversight). `scripts/build_rulepack.py` is a separate tool
+that emits a host-posture rule pack (`ronin.rulepack/v1`) consumed by the
+sibling RoninAI project, tagged against NIST 800-171, SOC 2, and CIS control
+refs.
+
+On top of that knowledge base, the agentic layer: `scripts/build_vector_index.py`
+regenerates `scripts/vector_index.db` (sqlite-vec; derived, gitignored, ~450MB
+- too large for git, trivially rebuildable) by embedding every control and
+every cached document chunk with a local CPU model
+(`BAAI/bge-small-en-v1.5`, 384-dim). `scripts/mcp_server.py` serves that index
+plus `scripts/vuln_intel.py` (CISA KEV/EPSS/NVD, locally cached) as MCP tools
+over stdio, registered for Claude Code via `.mcp.json`. The same capability is
+also packaged as a standalone skill at `.claude/skills/auditforge/SKILL.md`
+with CLI fallbacks for sessions without the MCP connection. All agentic-layer
+Python deps live in a project-local `.venv/` — never the system Python.
 
 ## Key Decisions
 - Knowledge-base clones are independent git clones, deliberately **not**
@@ -68,6 +108,17 @@ and CIS control refs.
   intentional test-case target for this project, not a compliance KB.
 - `framework_metadata.json` is fully derived — regenerate via
   `python scripts/sync_frameworks.py`, never hand-edit (per CLAUDE.md).
+- 2026-09-09: `scripts/vector_index.db` is derived like `framework_metadata.json`
+  but deliberately **not** git-tracked (unlike that file) — it's ~450MB,
+  which is impractical for git and trivially regenerable in a few minutes via
+  `python scripts/build_vector_index.py`. `document_catalog.db` stays tracked
+  (small, metadata-only) while `scripts/document_cache/` (raw cached bodies)
+  stays gitignored, same as before.
+- 2026-09-09: FedRAMP's old Rev5 baseline-profile source
+  (`GSA/fedramp-automation`) was confirmed genuinely gone, not a lookup
+  error — `git ls-remote` returns "Repository not found". FedRAMP has moved
+  to a "20x" Key Security Indicators model; `github.com/FedRAMP/rules` is its
+  actual current machine-readable source and is now cloned as `fedramp-rules/`.
 
 ## Deprecated/Legacy
 - `nist-csf/`, `gdpr-checklist/`, `security-templates/` are legacy/reference
@@ -76,4 +127,4 @@ and CIS control refs.
   control data.
 
 ## Last Updated
-2026-09-02
+2026-09-09

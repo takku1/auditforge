@@ -326,6 +326,32 @@ def run_dependency_audit(target_dir: str, conf: dict, mapping_data: dict) -> Lis
     return findings
 
 
+def _enrich_with_vuln_intel(vuln: dict, severity: str, remediation: str) -> tuple:
+    """Best-effort CISA KEV / FIRST.org EPSS enrichment for one OSV vuln entry.
+    OSV IDs (GHSA-*, PYSEC-*, ...) aren't CVE IDs, so this looks for a CVE
+    alias first. Non-fatal on any failure (offline, rate-limited, no CVE
+    alias) - the base OSV finding still reports either way, this only adds
+    "is this one actually being exploited" context, per CLAUDE.md's
+    risk-based remediation-prioritization mandate (CC7.1/CC7.2).
+    """
+    cve_id = next((a for a in vuln.get("aliases", []) if a.upper().startswith("CVE-")), None)
+    if not cve_id:
+        return severity, remediation
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        import vuln_intel
+        kev_hit = vuln_intel.check_kev(cve_id)
+        if kev_hit is not None:
+            severity = "CRITICAL"
+            remediation += (f" | CISA KEV: actively exploited in the wild "
+                             f"(added {kev_hit.get('dateAdded', 'unknown date')}, "
+                             f"ransomware use: {kev_hit.get('knownRansomwareCampaignUse', 'Unknown')}) - "
+                             f"treat as urgent regardless of CVSS.")
+    except Exception:  # noqa: BLE001 - enrichment is best-effort, never fail the base scan for it
+        pass
+    return severity, remediation
+
+
 def _query_osv(package_name: str, version: str, ecosystem: str, file_path: str, target_dir: str, mapping_data: dict) -> List[UnifiedFinding]:
     import requests
     url = "https://api.osv.dev/v1/query"
@@ -351,6 +377,8 @@ def _query_osv(package_name: str, version: str, ecosystem: str, file_path: str, 
                     if sev_field:
                         severity = str(sev_field).upper()
                 
+                remediation = f"Upgrade package or check advisory: {vuln.get('id')} ({ecosystem}/{package_name})"
+                severity, remediation = _enrich_with_vuln_intel(vuln, severity, remediation)
                 finding = UnifiedFinding(
                     tool="OSV-API",
                     rule_id=rule_id,
@@ -359,7 +387,7 @@ def _query_osv(package_name: str, version: str, ecosystem: str, file_path: str, 
                     file=os.path.relpath(file_path, target_dir),
                     line=0,
                     snippet=f"Ecosystem: {ecosystem}, Package: {package_name}, Version: {version} - {vuln.get('summary', 'No summary')}",
-                    remediation=f"Upgrade package or check advisory: {vuln.get('id')} ({ecosystem}/{package_name})"
+                    remediation=remediation
                 )
                 finding.frameworks = mapping_data.get("mappings", {}).get(rule_id, [])
                 if not finding.frameworks:

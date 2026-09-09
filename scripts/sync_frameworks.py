@@ -23,6 +23,7 @@ class FrameworkManager:
         "top10":         {"local_path": "owasp-top10/osib/export"},
         "attack":        {"local_path": "attack-stix-data/enterprise-attack"},
         "scf":           {"local_path": "secure-controls-framework"},
+        "fedramp_rules": {"local_path": "fedramp-rules/fedramp-consolidated-rules.json"},
     }
 
     # Friendlier labels for the ComplianceAsCode control files that map to a
@@ -62,6 +63,7 @@ class FrameworkManager:
         self._parse_asvs()
         self._parse_attack()
         self._parse_scf_crosswalk()
+        self._parse_fedramp_ksi()
         # OWASP Top 10 OSIB export is a deeply nested CWE-linkage graph, not a
         # flat control list - deliberately left as a presence flag rather than
         # a fragile deep-parse; see docs/framework-coverage-audit-2026-09-02.md.
@@ -352,6 +354,47 @@ class FrameworkManager:
         walk(data.get("Requirements") or data.get("chapters"))
         version = data.get("Version", "")
         self.metadata["frameworks"]["ASVS"] = f"OWASP ASVS v{version}"
+
+    def _parse_fedramp_ksi(self):
+        """Parses FedRAMP 20x's Key Security Indicators (the framework that
+        replaced the old Rev5 baseline-profile model - see ROADMAP RF-003).
+        Source: FedRAMP/rules (github.com/FedRAMP/rules), the machine-readable
+        source of truth behind fedramp.gov/2026/ - public domain, US federal
+        work. Each indicator (e.g. KSI-CED-RAT) becomes its own control entry,
+        with its mapped NIST SP 800-53 control IDs appended so it crosswalks
+        against the NIST53:* entries already indexed by _parse_oscal.
+        """
+        path = self.SOURCES["fedramp_rules"]["local_path"]
+        if not os.path.exists(path):
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        ksi_groups = data.get("KSI")
+        if not isinstance(ksi_groups, dict):
+            return
+
+        n = 0
+        for group in ksi_groups.values():
+            if not isinstance(group, dict):
+                continue
+            indicators = group.get("indicators")
+            if not isinstance(indicators, dict):
+                continue
+            for ind_id, ind in indicators.items():
+                if not isinstance(ind, dict):
+                    continue
+                statement = str(ind.get("statement") or ind.get("name") or "").strip()
+                if not statement:
+                    continue
+                controls = ind.get("controls") or []
+                mapped = ", ".join(sorted({str(c).upper() for c in controls if c})) if controls else ""
+                text = f"{statement} (maps to NIST 800-53: {mapped})" if mapped else statement
+                self.metadata["controls"][f"FEDRAMP20X:{ind_id}"] = text
+                n += 1
+        if n:
+            self.metadata["frameworks"]["FEDRAMP20X"] = (
+                "FedRAMP 20x Key Security Indicators (via FedRAMP/rules)")
+        print(f"[i] fedramp_rules: {n} Key Security Indicators indexed")
 
 
 if __name__ == "__main__":
