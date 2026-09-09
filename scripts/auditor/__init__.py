@@ -25,20 +25,33 @@ def _git_tracked_files(root: str):
     return {line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line.strip()}
 
 
-def audit_directory(root: str, excludes: list = None, min_severity: str = "LOW") -> dict:
-    from .scanners import iter_files, scan_file
+def audit_directory(root: str, excludes: list = None, min_severity: str = "LOW",
+                     history: bool = False, disabled_rules: set = None) -> dict:
+    from .scanners import iter_files, scan_file, scan_git_history
     from datetime import datetime, timezone
     excludes = excludes or []
+    disabled_rules = disabled_rules or set()
     findings = []
     files_scanned = 0
+    skipped = {"oversized": 0, "binary": 0, "unreadable": 0}
     for path, rel in iter_files(root, excludes):
         files_scanned += 1
-        findings.extend(scan_file(path, rel))
+        file_findings, skip_reason = scan_file(path, rel)
+        if skip_reason:
+            skipped[skip_reason] += 1
+        findings.extend(file_findings)
+
+    if history:
+        findings.extend(scan_git_history(root, excludes))
 
     tracked = _git_tracked_files(root)
     if tracked is not None:
         for f in findings:
-            f.git_tracked = f.file.replace("\\", "/") in tracked
+            if not f.historical:
+                f.git_tracked = f.file.replace("\\", "/") in tracked
+
+    if disabled_rules:
+        findings = [f for f in findings if f.rule.id not in disabled_rules]
 
     threshold = SEVERITY_RANK[min_severity]
     findings = [f for f in findings if SEVERITY_RANK[f.severity] <= threshold]
@@ -54,6 +67,7 @@ def audit_directory(root: str, excludes: list = None, min_severity: str = "LOW")
         "target": os.path.abspath(root),
         "scanned_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "files_scanned": files_scanned,
+        "skipped": skipped,
         "summary": summary,
         "findings": findings,
     }

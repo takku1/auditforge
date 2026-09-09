@@ -99,6 +99,48 @@ def test_iter_document_texts_uses_metadata_fallback_when_uncached(tmp_path, monk
     assert "Test Standard" in text
 
 
+def test_tokenize_scf_clause_splits_and_uppercases():
+    assert bvi._tokenize_scf_clause("4.2 4.2(a)") == ["4.2", "4.2(A)"]
+
+
+def test_tokenize_scf_clause_strips_punctuation():
+    assert bvi._tokenize_scf_clause("AC-2, AC-2(1); AC-3") == ["AC-2", "AC-2(1)", "AC-3"]
+
+
+def test_tokenize_scf_clause_empty_string():
+    assert bvi._tokenize_scf_clause("") == []
+
+
+def test_build_scf_token_index_populates_from_scf_prefixed_controls():
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(bvi.SCHEMA)  # plain tables only - vec0 virtual tables are created separately in _open_index()
+    conn.execute(
+        "INSERT INTO controls_meta (control_id, framework, text) VALUES (?, ?, ?)",
+        ("IAC-01", "SCF_GENERAL_ISO_27001_2022", "9.2.1"),
+    )
+    conn.execute(
+        "INSERT INTO controls_meta (control_id, framework, text) VALUES (?, ?, ?)",
+        ("IAC-01", "SCF_GENERAL_NIST_800_53_R5", "AC-2 AC-2(1)"),
+    )
+    conn.execute(
+        "INSERT INTO controls_meta (control_id, framework, text) VALUES (?, ?, ?)",
+        ("AC-2", "NIST53", "Account Management"),  # not SCF_* - must be excluded
+    )
+    conn.commit()
+
+    n = bvi._build_scf_token_index(conn)
+    conn.commit()
+
+    rows = conn.execute("SELECT token, scf_family, scf_id FROM scf_crosswalk_tokens ORDER BY token").fetchall()
+    assert n == 3  # "9.2.1", "AC-2", "AC-2(1)"
+    assert ("9.2.1", "SCF_GENERAL_ISO_27001_2022", "IAC-01") in rows
+    assert ("AC-2", "SCF_GENERAL_NIST_800_53_R5", "IAC-01") in rows
+    assert ("AC-2(1)", "SCF_GENERAL_NIST_800_53_R5", "IAC-01") in rows
+    # the non-SCF NIST53 control must not have contributed any token rows
+    assert all(fam != "NIST53" for _, fam, _ in rows)
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

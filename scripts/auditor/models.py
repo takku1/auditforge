@@ -36,6 +36,13 @@ class Finding:
     # docs/field-test-roninai-2026-08-25.md §G2 — remediation text for a
     # secret differs meaningfully (rotate now vs. was never committed).
     git_tracked: Any = None
+    # True when this finding came from --history (git log -p --all), not a
+    # scan of the working tree — see R-013. `file`/`line` still point at the
+    # path/position within the commit's diff, not necessarily anything that
+    # exists in the working tree today.
+    historical: bool = False
+    # For a historical finding: the short commit hash it was found in.
+    commit: Any = None
 
     @property
     def fingerprint(self) -> str:
@@ -46,6 +53,12 @@ class Finding:
 
     @property
     def effective_remediation(self) -> str:
+        if self.historical:
+            return (f"{self.rule.remediation} Found in git HISTORY"
+                     f"{f' (commit {self.commit})' if self.commit else ''}, not "
+                     "necessarily the working tree — if this is a real secret, "
+                     "rotate it AND purge it from history (it's reachable via "
+                     "`git log -p --all` regardless of the file's current content).")
         if self.git_tracked is True:
             return (f"{self.rule.remediation} This file is tracked by git — if this "
                      "value is a real secret, treat it as compromised: rotate it and "
@@ -67,6 +80,8 @@ class Finding:
             "snippet": self.snippet,
             "in_test_context": self.in_test_context,
             "git_tracked": self.git_tracked,
+            "historical": self.historical,
+            "commit": self.commit,
             "remediation": self.effective_remediation,
             "fingerprint": self.fingerprint,
         }

@@ -22,6 +22,8 @@ class FrameworkManager:
         "asvs":          {"local_path": "asvs/5.0/docs_en"},
         "top10":         {"local_path": "owasp-top10/osib/export"},
         "attack":        {"local_path": "attack-stix-data/enterprise-attack"},
+        "attack_ics":    {"local_path": "attack-stix-data/ics-attack"},
+        "attack_mobile": {"local_path": "attack-stix-data/mobile-attack"},
         "scf":           {"local_path": "secure-controls-framework"},
         "fedramp_rules": {"local_path": "fedramp-rules/fedramp-consolidated-rules.json"},
     }
@@ -61,7 +63,9 @@ class FrameworkManager:
         self._parse_oscal("csf2", "CSF2", "NIST Cybersecurity Framework 2.0")
         self._parse_cac_controls_dir()
         self._parse_asvs()
-        self._parse_attack()
+        self._parse_attack("attack", "ATTACK", "MITRE ATT&CK Enterprise")
+        self._parse_attack("attack_ics", "ATTACK_ICS", "MITRE ATT&CK ICS")
+        self._parse_attack("attack_mobile", "ATTACK_MOBILE", "MITRE ATT&CK Mobile")
         self._parse_scf_crosswalk()
         self._parse_fedramp_ksi()
         # OWASP Top 10 OSIB export is a deeply nested CWE-linkage graph, not a
@@ -205,12 +209,20 @@ class FrameworkManager:
               + (f" ({skipped_sections} section files skipped - unquoted Jinja2 macros)"
                  if skipped_sections else ""))
 
-    def _parse_attack(self):
-        """Parses MITRE ATT&CK Enterprise techniques from the STIX 2.1 bundle."""
-        base = Path(self.SOURCES["attack"]["local_path"])
-        path = base / "enterprise-attack.json"
+    def _parse_attack(self, source_key: str, prefix: str, label: str):
+        """Parses MITRE ATT&CK techniques from a STIX 2.1 bundle. Generalized
+        (R-030) to cover all three matrices - Enterprise (`attack`/`ATTACK`,
+        unchanged prefix for backward compatibility with anything already
+        querying it), ICS (`attack_ics`/`ATTACK_ICS`), and Mobile
+        (`attack_mobile`/`ATTACK_MOBILE`) - each registered as its own
+        framework family rather than merged into one, since technique IDs
+        aren't guaranteed unique across matrices.
+        """
+        base = Path(self.SOURCES[source_key]["local_path"])
+        stem = base.name  # "enterprise-attack" | "ics-attack" | "mobile-attack"
+        path = base / f"{stem}.json"
         if not path.exists():
-            candidates = sorted(base.glob("enterprise-attack-*.json"))
+            candidates = sorted(base.glob(f"{stem}-*.json"))
             if not candidates:
                 return
             path = candidates[-1]
@@ -230,11 +242,11 @@ class FrameworkManager:
                 None,
             )
             if ext_id and name:
-                self.metadata["controls"][f"ATTACK:{ext_id}"] = name
+                self.metadata["controls"][f"{prefix}:{ext_id}"] = name
                 n += 1
         if n:
-            self.metadata["frameworks"]["ATTACK"] = "MITRE ATT&CK Enterprise"
-        print(f"[i] attack: {n} techniques indexed")
+            self.metadata["frameworks"][prefix] = label
+        print(f"[i] {source_key}: {n} techniques indexed")
 
     def _parse_scf_crosswalk(self):
         """Parses the Secure Controls Framework crosswalk workbook: registers

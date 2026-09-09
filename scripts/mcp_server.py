@@ -121,11 +121,12 @@ def search_controls(query: str, framework: str | None = None, top_k: int = 10) -
     families (the Secure Controls Framework crosswalk's per-standard columns,
     e.g. SCF_GENERAL_ISO_27001_2022) index bare clause-number strings (e.g.
     "4.2 4.2(a)") as their "text", not real descriptions - semantic search
-    AND crosswalk_control() are both low-quality against them by
-    construction (there's no real text to embed). If you already know the
-    exact SCF control ID, get_control() against an SCF_* family still works
-    (exact lookup, not similarity). Returns the top_k best matches with a
-    similarity distance (lower = closer)."""
+    over them is low-quality by construction (there's no real text to
+    embed). For an SCF_* target, use crosswalk_control() instead - it joins
+    through the SCF's own shared control-ID structure (deterministic, not
+    similarity-based). get_control() also still works against an SCF_*
+    family if you already know the exact SCF control ID. Returns the top_k
+    best matches with a similarity distance (lower = closer)."""
     conn = _vector_conn()
     q = _embed_query(query)
     top_k = max(1, min(top_k, 50))
@@ -216,18 +217,63 @@ def crosswalk_rule(rule_id: str) -> dict:
 
 @server.tool()
 def crosswalk_control(control_id: str, framework: str, target_framework: str, top_k: int = 3) -> dict:
-    """Approximate crosswalk between frameworks: given a control in one
-    framework, finds the semantically closest control(s) in a different
-    target framework. This is nearest-neighbor similarity, not an
-    authoritative legal mapping - treat it as a starting point for manual
-    verification, not a citation. Only reliable when BOTH frameworks have
-    real control text - i.e. target_framework is NOT one of the ~248 `SCF_*`
-    families (see search_controls()'s docstring for why); for those, use
-    crosswalk_rule() if the source is an audit_repo.py rule ID, or accept
-    that results will be low-quality."""
+    """Crosswalk one control from `framework` to its equivalent(s) in
+    `target_framework`. Uses the most trustworthy method available for the
+    pair, reported in the result's "method" field:
+
+    - "exact_scf_direct": both frameworks are `SCF_*` families (Secure
+      Controls Framework crosswalk columns, e.g. SCF_GENERAL_ISO_27001_2022)
+      - they share the same underlying SCF control ID, so this is a direct,
+      exact lookup. Trustworthy.
+    - "exact_scf_token_join" (R-047): target_framework is `SCF_*` but the
+      source isn't. Looks up control_id as a literal token across every
+      SCF_* family's clause values to find its SCF control ID, then reads
+      target_framework's clause for that same ID. Deterministic (a token
+      either matches or it doesn't) and far more reliable than similarity
+      search over SCF_*'s bare clause-number text - but still a token match,
+      not a certified legal mapping; verify before citing.
+    - "semantic_similarity": target_framework has real descriptive control
+      text (NIST53/NIST171/CSF2/ASVS/ATTACK/FEDRAMP20X/ComplianceAsCode
+      families). Nearest-neighbor embedding similarity - a starting point
+      for manual verification, never a citation on its own.
+    """
     got = get_control(control_id, framework)
     if not got["found"]:
         return {"found": False, "reason": f"{framework}:{control_id} not indexed"}
+
+    if framework.startswith("SCF_") and target_framework.startswith("SCF_"):
+        target = get_control(control_id, target_framework)
+        return {
+            "found": True, "method": "exact_scf_direct",
+            "source": {"framework": framework, "control_id": control_id, "text": got["text"]},
+            "candidates": ([{"control_id": target["control_id"], "text": target["text"], "distance": 0.0}]
+                           if target["found"] else []),
+        }
+
+    if target_framework.startswith("SCF_"):
+        conn = _vector_conn()
+        token = control_id.strip().upper()
+        hits = conn.execute(
+            "SELECT DISTINCT scf_family, scf_id FROM scf_crosswalk_tokens WHERE token = ?",
+            (token,),
+        ).fetchall()
+        candidates = []
+        for scf_family, scf_id in hits:
+            row = conn.execute(
+                "SELECT text FROM controls_meta WHERE framework = ? AND control_id = ?",
+                (target_framework, scf_id),
+            ).fetchone()
+            if row:
+                candidates.append({
+                    "control_id": scf_id, "text": row[0], "distance": 0.0,
+                    "matched_via": scf_family,  # which SCF family's column contained this token - sanity-check against source
+                })
+        return {
+            "found": True, "method": "exact_scf_token_join",
+            "source": {"framework": framework, "control_id": control_id, "text": got["text"]},
+            "candidates": candidates[:max(1, min(top_k, 20))],
+        }
+
     conn = _vector_conn()
     q = _embed_query(got["text"])
     top_k = max(1, min(top_k, 20))
@@ -241,7 +287,7 @@ def crosswalk_control(control_id: str, framework: str, target_framework: str, to
         (q, target_framework, top_k),
     ).fetchall()
     return {
-        "found": True,
+        "found": True, "method": "semantic_similarity",
         "source": {"framework": framework, "control_id": control_id, "text": got["text"]},
         "candidates": [
             {"control_id": r[0], "text": r[1], "distance": round(r[2], 4)} for r in rows

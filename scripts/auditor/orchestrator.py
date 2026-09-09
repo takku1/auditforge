@@ -44,6 +44,10 @@ class UniversalAuditor:
         conf = self.config["tools"].get("osv", {"enabled": True})
         self.findings.extend(scanners.run_dependency_audit(self.target_dir, conf, self.mapping_data))
 
+    def run_cargo_audit(self):
+        conf = self.config["tools"].get("cargo_audit", {"enabled": True})
+        self.findings.extend(scanners.run_cargo_audit(self.target_dir, conf, self.mapping_data))
+
     def run_network_audit(self, override_targets: Optional[List[str]] = None):
         targets = override_targets if override_targets is not None else self.config.get("network_targets", [])
         self.findings.extend(scanners.run_network_audit(targets, self.mapping_data))

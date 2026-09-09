@@ -22,10 +22,14 @@ produced here MUST respect the Foundational Mandates below.
   code you write or modify before finishing a task. Run the auditor's own
   tests (`python scripts/test_audit_repo.py`) after changing it.
 - **Dependency Vetting:** Scan for vulnerable dependencies when adding new
-  libraries (`npm audit`, `pip-audit`). `universal_audit.py`'s OSV scan
-  auto-enriches CVE-aliased findings with CISA KEV/EPSS via
+  libraries (`npm audit`, `pip-audit`, `cargo audit` for Rust).
+  `universal_audit.py`'s OSV scan is workspace-aware (walks the whole target
+  dir, not just the root) across PyPI/npm/crates.io/Go/RubyGems/Packagist,
+  and auto-enriches CVE-aliased findings with CISA KEV/EPSS via
   `scripts/vuln_intel.py` - a KEV hit means "prioritize this over CVSS
-  severity alone," not just "a vulnerability exists somewhere."
+  severity alone," not just "a vulnerability exists somewhere." `run_cargo_audit()`
+  additionally checks every `Cargo.lock` against the RUSTSEC advisory
+  database directly (requires the `cargo-audit` binary).
 - **No unsafe patterns:** No `eval`/`exec` on dynamic input, no unsafe
   deserialization (pickle / `yaml.load` without a Loader), no `shell=True`
   with interpolated input, no SQL built by string concatenation.
@@ -66,7 +70,8 @@ Exit 0 = all sources fresh. Any FAILED row: fix or re-run when online.
 | `scripts/vuln_intel.py` | Free-API client (CISA KEV, FIRST.org EPSS, NVD) with a local on-disk cache to respect rate limits and avoid re-fetching |
 | `.venv/` | Project-local virtualenv for the agentic-layer deps (`mcp`, `sentence-transformers`, `sqlite-vec`) - never install these into a global/system Python |
 | `reports/` | All generated audit artifacts |
-| `docs/architecture/` | Recurspec contract tree (`recurspec status .`) |
+| `docs/architecture/` | Recurspec contract tree for the knowledge-base/session-updater/workspace-hygiene concern (`recurspec status .`) |
+| `docs/architecture-engine/` | Sibling recurspec contract tree for the audit-engine concern (`recurspec contract check docs/architecture-engine`, `recurspec structure check . --source-root scripts --contract-root docs/architecture-engine`) — auditor-core, cli-entrypoints, framework-sync, agentic-layer |
 | `ROADMAP.md` | Sole incomplete-work registry |
 | `oscal-content/` | NIST 800-53 R5 / 800-171 R3 / CSF 2.0 / SSDF catalogs (OSCAL) |
 | `attack-stix-data/` | MITRE ATT&CK Enterprise v9 (STIX 2.1) |
@@ -102,7 +107,12 @@ python scripts/audit_repo.py <dir> --min-severity MEDIUM # hide low noise
 python scripts/audit_repo.py <dir> --exclude "gen/*"     # skip paths
 python scripts/audit_repo.py <dir> --update-baseline b.json  # accept current
 python scripts/audit_repo.py <dir> --baseline b.json     # only new findings
+python scripts/audit_repo.py <dir> --history             # also scan git history for deleted secrets
 ```
+
+A `.soc2rc.yml` at the scanned directory's root (`exclude:`, `min_severity:`,
+`disable_rules:`) sets per-repo defaults that CLI flags override - see
+`load_repo_config()` in `audit_repo.py`.
 
 Detections (each tagged with its SOC 2 control): hardcoded secrets and cloud
 tokens (AWS/GitHub/Slack/Stripe/Google), private key material, wildcard IAM,
@@ -122,3 +132,13 @@ containing `soc2-ignore` is suppressed (add a justification comment).
    finding (fix it or suppress with a documented `soc2-ignore` justification).
 3. For major security or infrastructure changes, do a second adversarial pass:
    re-read the diff specifically hunting for mandate violations.
+4. **Manually check any function gated by a `requires_confirmation`-shaped
+   parameter at every call site.** No rule engine here (or realistically any
+   static regex/AST scanner) can verify that a caller actually honors an
+   authorization gate three files away - a GUI or alternate entrypoint that
+   calls the same function while skipping/hardcoding that parameter is a
+   real, seen-in-the-wild bypass class (see
+   docs/field-test-searchtool-2026-09-02.md's `execute_system_ability`
+   finding) that only a human reading the call graph will catch. This is a
+   deliberate non-goal for `audit_repo.py`'s rule engine, not a gap to fix
+   there - see ROADMAP R-024.

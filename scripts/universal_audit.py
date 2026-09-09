@@ -34,7 +34,8 @@ def main():
     auditor.run_network_audit(override_targets)
     auditor.run_trivy()
     auditor.run_dependency_audit()
-    
+    auditor.run_cargo_audit()
+
     print(auditor.generate_report(args.format))
 
 if __name__ == "__main__":

@@ -38,6 +38,8 @@ def _build_fixture_index(path: Path):
         """
         CREATE TABLE controls_meta (rowid INTEGER PRIMARY KEY, control_id TEXT, framework TEXT, text TEXT);
         CREATE TABLE documents_meta (rowid INTEGER PRIMARY KEY, fdi TEXT, chunk_index INTEGER, source TEXT, text TEXT);
+        CREATE TABLE scf_crosswalk_tokens (token TEXT, scf_family TEXT, scf_id TEXT);
+        CREATE INDEX idx_scf_tokens_token ON scf_crosswalk_tokens(token);
         """
     )
     # DIM is a hardcoded int constant (test-only vector size), not
@@ -52,6 +54,10 @@ def _build_fixture_index(path: Path):
         ("CC6.1", "SOC2", "Logical access controls restrict system access."),
         ("AC-2", "NIST53", "The organization manages information system accounts."),
         ("A.9.2.1", "ISO27001", "User registration and de-registration process."),
+        # SCF-crosswalk-derived families (R-047 fixture): both share the
+        # scf_id "IAC-01" for the same underlying SCF control.
+        ("IAC-01", "SCF_GENERAL_ISO_27001_2022", "9.2.1"),
+        ("IAC-01", "SCF_GENERAL_NIST_800_53_R5", "AC-2 AC-2(1)"),
     ]
     for i, (cid, fw, text) in enumerate(rows, start=1):
         conn.execute("INSERT INTO controls_meta (rowid, control_id, framework, text) VALUES (?, ?, ?, ?)", (i, cid, fw, text))
@@ -59,6 +65,10 @@ def _build_fixture_index(path: Path):
             "INSERT INTO controls_vec (rowid, embedding, framework) VALUES (?, ?, ?)",
             (i, sqlite_vec.serialize_float32(_fake_vec(text)), fw),
         )
+    for token, scf_family, scf_id in [("AC-2", "SCF_GENERAL_NIST_800_53_R5", "IAC-01"),
+                                        ("AC-2(1)", "SCF_GENERAL_NIST_800_53_R5", "IAC-01")]:
+        conn.execute("INSERT INTO scf_crosswalk_tokens (token, scf_family, scf_id) VALUES (?, ?, ?)",
+                     (token, scf_family, scf_id))
 
     doc_rows = [("fdi-1", 0, "cached_text", "Access control policy document text.")]
     for i, (fdi, chunk_idx, source, text) in enumerate(doc_rows, start=1):
@@ -119,7 +129,49 @@ def test_crosswalk_control_finds_nearest_in_target_framework(tmp_path, monkeypat
 
     result = mcp_server.crosswalk_control("CC6.1", "SOC2", "ISO27001", top_k=1)
     assert result["found"] is True
+    assert result["method"] == "semantic_similarity"
     assert result["candidates"][0]["control_id"] == "A.9.2.1"
+
+
+def test_crosswalk_control_exact_scf_direct(tmp_path, monkeypatch):
+    # R-047: both source and target are SCF_* families sharing the same
+    # scf_id - must be a direct exact lookup (distance 0), no embedding call.
+    conn = _build_fixture_index(tmp_path / "vector_index.db")
+    monkeypatch.setattr(mcp_server, "_vec_conn", conn)
+    monkeypatch.setattr(mcp_server, "_embed_query", lambda q: (_ for _ in ()).throw(AssertionError("should not embed for exact_scf_direct")))
+
+    result = mcp_server.crosswalk_control("IAC-01", "SCF_GENERAL_NIST_800_53_R5", "SCF_GENERAL_ISO_27001_2022")
+    assert result["found"] is True
+    assert result["method"] == "exact_scf_direct"
+    assert result["candidates"] == [{"control_id": "IAC-01", "text": "9.2.1", "distance": 0.0}]
+
+
+def test_crosswalk_control_exact_scf_token_join(tmp_path, monkeypatch):
+    # R-047: source is a real standard (NIST53:AC-2), target is SCF_* -
+    # must join through the token index, not semantic similarity.
+    conn = _build_fixture_index(tmp_path / "vector_index.db")
+    monkeypatch.setattr(mcp_server, "_vec_conn", conn)
+    monkeypatch.setattr(mcp_server, "_embed_query", lambda q: (_ for _ in ()).throw(AssertionError("should not embed for exact_scf_token_join")))
+
+    result = mcp_server.crosswalk_control("AC-2", "NIST53", "SCF_GENERAL_ISO_27001_2022")
+    assert result["found"] is True
+    assert result["method"] == "exact_scf_token_join"
+    assert len(result["candidates"]) == 1
+    candidate = result["candidates"][0]
+    assert candidate["control_id"] == "IAC-01"
+    assert candidate["text"] == "9.2.1"
+    assert candidate["matched_via"] == "SCF_GENERAL_NIST_800_53_R5"
+
+
+def test_crosswalk_control_token_join_no_match(tmp_path, monkeypatch):
+    conn = _build_fixture_index(tmp_path / "vector_index.db")
+    monkeypatch.setattr(mcp_server, "_vec_conn", conn)
+    monkeypatch.setattr(mcp_server, "_embed_query", lambda q: (_ for _ in ()).throw(AssertionError("should not embed")))
+
+    result = mcp_server.crosswalk_control("AC-2", "NIST53", "SCF_GENERAL_NOWHERE")
+    assert result["found"] is True
+    assert result["method"] == "exact_scf_token_join"
+    assert result["candidates"] == []
 
 
 def test_list_frameworks_counts_controls(tmp_path, monkeypatch):

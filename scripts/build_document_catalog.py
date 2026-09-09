@@ -261,6 +261,40 @@ def _insert(conn: sqlite3.Connection, row: dict) -> None:
 CACHE_DIR = Path(__file__).resolve().parent / "document_cache"
 CACHEABLE_STATUSES = {"public_domain", "free_to_access"}
 
+# Content signals that mean "this isn't the document, it's a wall between us
+# and the document" - found by manually verifying all 21 documents R-040's
+# byte-size heuristic flagged as SUSPECT LANDING PAGE (see ROADMAP R-041):
+# 6 were genuinely fine (short-but-real bill text / standard intro pages),
+# 15 were paywalls, bot-block challenges, or JS-only SPA shells with no
+# server-rendered content at all. Matched case-insensitively against the
+# response's <title> - specific enough not to false-positive on a real
+# document that happens to be short.
+BLOCKED_TITLE_SIGNALS = (
+    "request access", "request rejected", "access denied", "just a moment",
+    "attention required", "are you a robot", "captcha",
+)
+_TITLE_RE = re.compile(r"(?is)<title[^>]*>([^<]*)</title>")
+
+
+def _looks_blocked(content: bytes) -> "str | None":
+    """Returns a short reason string if this response is a known access-wall
+    shape, else None. Two independent signals: an empty body (some SPAs
+    return literally nothing to a plain GET), or a <title> matching a known
+    block/challenge phrase.
+    """
+    if len(content) == 0:
+        return "empty response"
+    title_match = _TITLE_RE.search(content.decode("utf-8", errors="ignore"))
+    if title_match:
+        title = title_match.group(1).strip().lower()
+        for signal in BLOCKED_TITLE_SIGNALS:
+            if signal in title:
+                return f"title matched {signal!r}"
+    content_lower = content.lower()
+    if b"_incapsula_resource" in content_lower or b"cf-browser-verification" in content_lower:
+        return "bot-challenge script detected"
+    return None
+
 
 def cache_document(conn: sqlite3.Connection, fdi: str, timeout: int = 20) -> str:
     """Fetches and stores the raw bytes of one document. Refuses anything not
@@ -290,6 +324,10 @@ def cache_document(conn: sqlite3.Connection, fdi: str, timeout: int = 20) -> str
         resp.raise_for_status()
     except Exception as exc:  # noqa: BLE001 - network calls, report and move on
         return f"fetch-failed ({exc.__class__.__name__})"
+
+    blocked_reason = _looks_blocked(resp.content)
+    if blocked_reason:
+        return f"blocked ({blocked_reason}) - not cached"
 
     content_type = resp.headers.get("Content-Type", "")
     ext = ".pdf" if "pdf" in content_type else (".html" if "html" in content_type else ".bin")

@@ -38,7 +38,15 @@ tools:
     # Available at: https://github.com/aquasecurity/trivy
   osv:
     enabled: true
-    # Queries the Google OSV API for real-time package vulnerabilities (SCA)
+    # Queries the Google OSV API for real-time package vulnerabilities (SCA).
+    # Workspace-aware: walks the target dir for requirements.txt, package.json,
+    # Cargo.lock, go.sum, Gemfile.lock, composer.lock (PyPI/npm/crates.io/Go/
+    # RubyGems/Packagist).
+  cargo_audit:
+    enabled: true
+    # Runs entirely locally using the RUSTSEC advisory database (OSS).
+    # Requires the `cargo-audit` binary (`cargo install cargo-audit`).
+    # Available at: https://github.com/rustsec/rustsec/tree/main/cargo-audit
     
 # -----------------------------------------------------------------------------
 # DAST & LIVE NETWORK AUDITING

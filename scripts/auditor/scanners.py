@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import json
 import sys
-from typing import List, Any
+from typing import List, Any, Optional
 from .models import Finding, Rule, UnifiedFinding
 from .rules import (
     RULES, SKIP_DIRS, SKIP_FILES, SKIP_EXTENSIONS, MAX_FILE_BYTES,
@@ -49,17 +49,22 @@ def iter_files(root: str, excludes: list):
             yield path, rel_posix
 
 
-def scan_file(path: str, rel: str) -> list:
+def scan_file(path: str, rel: str) -> "tuple[list, Optional[str]]":
+    """Returns (findings, skip_reason). skip_reason is None for a normally
+    scanned file, else "oversized" / "binary" / "unreadable" - see R-017:
+    these were silent no-ops before, indistinguishable from "scanned, found
+    nothing" in the report.
+    """
     try:
         if os.path.getsize(path) > MAX_FILE_BYTES:
-            return []
+            return [], "oversized"
         with open(path, "rb") as fh:
             raw = fh.read()
         if is_binary(raw[:8192]):
-            return []
+            return [], "binary"
         content = raw.decode("utf-8", errors="ignore")
     except OSError:
-        return []
+        return [], "unreadable"
 
     ext = os.path.splitext(path)[1].lower()
     basename = os.path.basename(path).lower()
@@ -110,7 +115,122 @@ def scan_file(path: str, rel: str) -> list:
                     rule=rule, severity=severity, file=rel,
                     line=line_no, snippet=snippet, in_test_context=in_test,
                 ))
+    return findings, None
+
+
+_COMMIT_RE = re.compile(r"^commit ([0-9a-f]{40})")
+_DIFF_FILE_RE = re.compile(r"^\+\+\+ b/(.+)$")
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+def scan_git_history(root: str, excludes: "Optional[list]" = None, timeout: int = 300) -> list:
+    """Scans every commit reachable from any ref (`git log -p --all`) for
+    secret-shaped findings, catching what a working-tree scan can't: a
+    secret added and later removed from HEAD is still fully recoverable from
+    history unless it's purged. See R-013 / docs/field-test... §G3.
+
+    Returns [] (not an error) when `root` isn't a git repo or git isn't on
+    PATH - same "unavailable" contract as `auditor.__init__._git_tracked_files`.
+    Opt-in via CLI --history: a full-history diff scan is meaningfully
+    slower than a working-tree scan, so it's never run by default.
+
+    Line-based, not whole-file regex like scan_file(): only "+"-added lines
+    are checked against each rule's patterns (a "-"-removed line was never
+    actually present as of that commit; a context line gets seen again in
+    every commit that touches the file otherwise, which would be pure noise).
+    Hunk headers (`@@ -a,b +c,d @@`) are tracked to report each finding's
+    real line number in that commit's version of the file, not just the
+    commit hash.
+    """
+    excludes = excludes or []
+    try:
+        result = subprocess.run(
+            ["git", "-C", root, "log", "-p", "--all", "--no-color", "--full-history"],
+            capture_output=True, text=True, encoding="utf-8", errors="ignore",
+            timeout=timeout,
+        )
+    except (OSError, FileNotFoundError):
+        return []
+    if result.returncode != 0:
+        return []
+
+    findings = []
+    commit = None
+    current_file = None
+    current_line = None
+    for line in result.stdout.splitlines():
+        m = _COMMIT_RE.match(line)
+        if m:
+            commit = m.group(1)[:8]
+            current_file = None
+            current_line = None
+            continue
+        m = _DIFF_FILE_RE.match(line)
+        if m:
+            current_file = m.group(1)
+            current_line = None
+            continue
+        m = _HUNK_RE.match(line)
+        if m:
+            current_line = int(m.group(1))
+            continue
+        if current_file is None or current_line is None:
+            continue
+        if line.startswith("+") and not line.startswith("+++"):
+            added_text = line[1:]
+            _scan_history_line(findings, current_file, current_line, added_text,
+                                commit, excludes)
+            current_line += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            continue  # removed line - doesn't exist in this commit's version, no line advance
+        else:
+            current_line += 1  # context line
     return findings
+
+
+def _scan_history_line(findings: list, file_path: str, line_no: int, text: str,
+                        commit: "Optional[str]", excludes: list) -> None:
+    rel_posix = file_path.replace("\\", "/")
+    if any(fnmatch.fnmatch(rel_posix, pat) for pat in excludes):
+        return
+    if should_skip_file(os.path.basename(file_path)):
+        return
+    ext = os.path.splitext(file_path)[1].lower()
+    basename = os.path.basename(file_path).lower()
+    in_test = bool(TEST_PATH_RE.search(rel_posix))
+
+    for rule in RULES:
+        ext_match = not rule.extensions or ext in rule.extensions
+        name_match = bool(rule.filenames) and any(
+            basename == fn or basename.startswith(fn + ".") for fn in rule.filenames
+        )
+        if not (ext_match or name_match):
+            continue
+        for pattern in rule.patterns:
+            for match in pattern.finditer(text):
+                if rule.check_reserved_suffix and RESERVED_SUFFIX_RE.search(match.group(0)):
+                    continue
+                if rule.value_group:
+                    value = match.group(rule.value_group) or ""
+                    if PLACEHOLDER_RE.search(value):
+                        continue
+                    if value.isupper() and re.match(r"^[A-Z0-9_]+$", value):
+                        continue
+                    if value.islower() and re.match(r"^[a-z0-9_]+\.[a-z0-9_]+$", value):
+                        continue
+                if is_comment(text, ext):
+                    continue
+                if SUPPRESS_TOKEN in text:
+                    continue
+                severity = downgrade(rule.severity) if in_test else rule.severity
+                snippet = match.group(0).strip()
+                if len(snippet) > 200:
+                    snippet = snippet[:200] + "..."
+                findings.append(Finding(
+                    rule=rule, severity=severity, file=rel_posix,
+                    line=line_no, snippet=snippet, in_test_context=in_test,
+                    historical=True, commit=commit,
+                ))
 
 
 def _tool_available(name: str) -> bool:
@@ -129,6 +249,7 @@ def engine_availability() -> dict:
         "checkov": _tool_available("checkov"),
         "semgrep": _tool_available("semgrep"),
         "trivy": _tool_available("trivy"),
+        "cargo-audit": _tool_available("cargo-audit"),
     }
 
 
@@ -285,44 +406,212 @@ def run_trivy(target_dir: str, conf: dict, mapping_data: dict) -> List[UnifiedFi
     return findings
 
 
+def _parse_requirements_txt(path: str) -> List[tuple]:
+    out = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "==" in line:
+                parts = line.split("==", 1)
+                pkg = parts[0].strip()
+                ver = parts[1].split("#")[0].strip()
+                out.append((pkg, ver))
+    return out
+
+
+def _parse_package_json(path: str) -> List[tuple]:
+    out = []
+    with open(path, "r", encoding="utf-8") as f:
+        pkg_data = json.load(f)
+    dependencies = pkg_data.get("dependencies", {})
+    devDependencies = pkg_data.get("devDependencies", {})
+    for pkg, ver in {**dependencies, **devDependencies}.items():
+        clean_ver = "".join(c for c in ver if c.isdigit() or c == "." or c == "-")
+        if len(clean_ver) >= 1:
+            out.append((pkg, clean_ver))
+    return out
+
+
+def _parse_cargo_lock(path: str) -> List[tuple]:
+    """Cargo.lock is valid TOML - a series of [[package]] tables, each with
+    name/version. Uses stdlib tomllib (Python 3.11+); on an older
+    interpreter this degrades to "Cargo.lock not parsed" rather than a hard
+    failure - no new dependency added just for this."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        raise RuntimeError("tomllib unavailable (Python <3.11) - Cargo.lock not parsed")
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+    out = []
+    for pkg in data.get("package", []):
+        name = pkg.get("name")
+        version = pkg.get("version")
+        if name and version:
+            out.append((name, version))
+    return out
+
+
+def _parse_go_sum(path: str) -> List[tuple]:
+    """go.sum lines: `module version hash` and `module version/go.mod hash`.
+    Emitted twice per module (content hash + go.mod hash) - dedup by
+    (module, version), and strip the `/go.mod` version suffix variant.
+    """
+    seen = set()
+    out = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            module, version = parts[0], parts[1]
+            version = version.split("/")[0].lstrip("v")
+            key = (module, version)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((module, version))
+    return out
+
+
+def _parse_gemfile_lock(path: str) -> List[tuple]:
+    """Gemfile.lock's GEM section:
+        GEM
+          remote: https://rubygems.org/
+          specs:
+            rack (2.2.3)
+            rails (7.0.4)
+              actioncable (= 7.0.4)
+    Top-level specs are indented exactly 4 spaces; their own dependency
+    lines (indented 6) are skipped - those aren't independently pinned here.
+    """
+    out = []
+    in_specs = False
+    spec_re = re.compile(r"^ {4}(\S+) \(([^)]+)\)")
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip() == "specs:":
+                in_specs = True
+                continue
+            if in_specs:
+                if line.strip() == "" or (not line.startswith(" ")):
+                    in_specs = False
+                    continue
+                m = spec_re.match(line.rstrip("\n"))
+                if m:
+                    name, version = m.group(1), m.group(2)
+                    if version and version[0].isdigit():
+                        out.append((name, version))
+    return out
+
+
+def _parse_composer_lock(path: str) -> List[tuple]:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    out = []
+    for pkg in data.get("packages", []) + data.get("packages-dev", []):
+        name = pkg.get("name")
+        version = str(pkg.get("version", "")).lstrip("v")
+        if name and version:
+            out.append((name, version))
+    return out
+
+
+# filename -> (parser, OSV ecosystem name)
+_LOCKFILE_PARSERS = {
+    "requirements.txt": (_parse_requirements_txt, "PyPI"),
+    "package.json": (_parse_package_json, "npm"),
+    "Cargo.lock": (_parse_cargo_lock, "crates.io"),
+    "go.sum": (_parse_go_sum, "Go"),
+    "Gemfile.lock": (_parse_gemfile_lock, "RubyGems"),
+    "composer.lock": (_parse_composer_lock, "Packagist"),
+}
+
+
+# --- cargo audit (Rust/RUSTSEC) ---
+def run_cargo_audit(target_dir: str, conf: dict, mapping_data: dict) -> List[UnifiedFinding]:
+    """Runs `cargo audit --json` against every Cargo.lock found in target_dir
+    (RUSTSEC advisory database, OSS, no API key). See ROADMAP R-021 - this
+    had to be run entirely outside AuditForge before. Requires the
+    `cargo-audit` binary (`cargo install cargo-audit`); skips (not fails)
+    when it isn't installed, same contract as run_trivy.
+    """
+    if not conf.get("enabled"): return []
+    if not _tool_available("cargo-audit"):
+        print("cargo-audit not installed - skipping (external engine unavailable)", file=sys.stderr)
+        return []
+
+    findings = []
+    for dirpath, dirnames, filenames in os.walk(target_dir):
+        dirnames[:] = [d for d in dirnames if d.lower() not in SKIP_DIRS]
+        if "Cargo.lock" not in filenames:
+            continue
+        lockfile = os.path.join(dirpath, "Cargo.lock")
+        print(f"Running cargo audit on {lockfile}...", file=sys.stderr)
+        try:
+            cmd = ["cargo", "audit", "--json", "--file", lockfile]
+            result = subprocess.run(cmd, capture_output=True, text=True,
+                                     encoding="utf-8", errors="ignore")
+            if not result.stdout.strip():
+                continue
+            data = json.loads(result.stdout)
+            vulns = data.get("vulnerabilities", {}).get("list", [])
+            for vuln in vulns:
+                advisory = vuln.get("advisory", {})
+                package = vuln.get("package", {})
+                rule_id = advisory.get("id", "RUSTSEC-UNKNOWN")
+                severity = str(advisory.get("severity") or "HIGH").upper()
+                if severity not in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+                    severity = "HIGH"
+                finding = UnifiedFinding(
+                    tool="cargo-audit",
+                    rule_id=rule_id,
+                    name=advisory.get("title", f"Vulnerability in {package.get('name')}"),
+                    severity=severity,
+                    file=lockfile,
+                    line=0,
+                    snippet=f"{package.get('name')} {package.get('version')} - {advisory.get('description', '')[:200]}",
+                    remediation=advisory.get("url", "") or "Upgrade the affected crate to a patched version.",
+                )
+                finding.frameworks = mapping_data.get("mappings", {}).get(rule_id, [])
+                if not finding.frameworks:
+                    finding.frameworks = mapping_data.get("mappings", {}).get("DEP_VULN", ["SOC2:CC8.1", "NIST:CM-3"])
+                findings.append(finding)
+        except Exception as e:
+            print(f"cargo audit failed on {lockfile}: {e}", file=sys.stderr)
+    return findings
+
+
 # --- OSV API Scanner ---
 def run_dependency_audit(target_dir: str, conf: dict, mapping_data: dict) -> List[UnifiedFinding]:
+    """Workspace-aware: walks target_dir for every recognized lockfile/manifest
+    (not just root-level requirements.txt/package.json - R-010), across 6
+    ecosystems (PyPI, npm, crates.io, Go, RubyGems, Packagist - OSV's API
+    already supports all of these). Skips the same noise dirs as the main
+    scanner (node_modules, vendor, .git, ...) so a monorepo's dependency
+    trees don't get re-walked as if they were first-party manifests.
+    """
     if not conf.get("enabled"): return []
     print("Running OSV API Real-Time Dependency Scan...", file=sys.stderr)
-    
+
     findings = []
-    req_txt = os.path.join(target_dir, "requirements.txt")
-    pkg_json = os.path.join(target_dir, "package.json")
-    
-    if os.path.exists(req_txt):
-        try:
-            with open(req_txt, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    if "==" in line:
-                        parts = line.split("==", 1)
-                        pkg = parts[0].strip()
-                        ver = parts[1].split("#")[0].strip()
-                        findings.extend(_query_osv(pkg, ver, "PyPI", req_txt, target_dir, mapping_data))
-        except Exception as e:
-            print(f"Error parsing requirements.txt: {e}", file=sys.stderr)
-            
-    if os.path.exists(pkg_json):
-        try:
-            with open(pkg_json, "r", encoding="utf-8") as f:
-                pkg_data = json.load(f)
-                dependencies = pkg_data.get("dependencies", {})
-                devDependencies = pkg_data.get("devDependencies", {})
-                all_deps = {**dependencies, **devDependencies}
-                for pkg, ver in all_deps.items():
-                    clean_ver = "".join(c for c in ver if c.isdigit() or c == "." or c == "-")
-                    if len(clean_ver) >= 1:
-                        findings.extend(_query_osv(pkg, clean_ver, "npm", pkg_json, target_dir, mapping_data))
-        except Exception as e:
-            print(f"Error parsing package.json: {e}", file=sys.stderr)
-            
+    for dirpath, dirnames, filenames in os.walk(target_dir):
+        dirnames[:] = [d for d in dirnames if d.lower() not in SKIP_DIRS]
+        for fname in filenames:
+            parser_info = _LOCKFILE_PARSERS.get(fname)
+            if not parser_info:
+                continue
+            parser, ecosystem = parser_info
+            file_path = os.path.join(dirpath, fname)
+            try:
+                packages = parser(file_path)
+            except Exception as e:
+                print(f"Error parsing {file_path}: {e}", file=sys.stderr)
+                continue
+            for pkg, ver in packages:
+                findings.extend(_query_osv(pkg, ver, ecosystem, file_path, target_dir, mapping_data))
     return findings
 
 

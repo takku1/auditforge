@@ -40,6 +40,8 @@ scripts/document_cache_run.log
 # which is itself gitignored for redistribution-rights reasons above) and
 # is trivially rebuildable locally in a few minutes.
 scripts/vector_index.db
+scripts/vector_index.db-*
+scripts/vector_rebuild*.log
 
 # vuln_intel.py's local API-response cache (CISA KEV/EPSS/NVD) - ephemeral,
 # TTL'd, regenerates itself on first use.

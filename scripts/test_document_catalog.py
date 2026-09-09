@@ -164,6 +164,49 @@ class TestCacheDocument(unittest.TestCase):
         self.assertTrue(result.startswith("cached ("))
 
 
+class TestLooksBlocked(unittest.TestCase):
+    def test_empty_response_is_blocked(self):
+        self.assertEqual(bdc._looks_blocked(b""), "empty response")
+
+    def test_title_signal_detected_case_insensitively(self):
+        html = b"<html><head><title>Federal Register :: Request Access</title></head></html>"
+        reason = bdc._looks_blocked(html)
+        self.assertIsNotNone(reason)
+        self.assertIn("request access", reason)
+
+    def test_incapsula_challenge_detected(self):
+        html = b'<script src="/_Incapsula_Resource?abc"></script>'
+        self.assertEqual(bdc._looks_blocked(html), "bot-challenge script detected")
+
+    def test_real_content_not_flagged(self):
+        html = b"<html><head><title>89(R) SB 2610 - Bill Text</title></head><body>Real bill text here</body></html>"
+        self.assertIsNone(bdc._looks_blocked(html))
+
+    @patch("requests.get")
+    def test_cache_document_refuses_blocked_content(self, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.headers = {"Content-Type": "text/html"}
+        mock_resp.content = b"<html><head><title>Request Rejected</title></head></html>"
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(bdc.SCHEMA)
+        conn.execute(
+            "INSERT INTO documents (fdi, name, source_url, catalog_source, license_status) "
+            "VALUES ('blocked-doc', 'x', 'https://example.gov/x.pdf', 'manual', 'public_domain')"
+        )
+        conn.commit()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(bdc, "CACHE_DIR", Path(tmp)):
+                result = bdc.cache_document(conn, "blocked-doc")
+        self.assertIn("blocked", result)
+        self.assertNotIn("SUSPECT", result)
+        row = conn.execute("SELECT full_text_cached FROM documents WHERE fdi = ?", ("blocked-doc",)).fetchone()
+        self.assertEqual(row[0], 0)  # never marked cached
+
+
 class TestCacheAll(unittest.TestCase):
     def _conn_with_rows(self, fdis_and_statuses):
         conn = sqlite3.connect(":memory:")

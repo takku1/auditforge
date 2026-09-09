@@ -9,12 +9,43 @@ the ~42k-control knowledge base directly instead of an operator shelling out
 to CLIs and parsing text by hand.
 
 ## Active Focus
-Framework/auditor-engine work (R-008..R-037) is closed; remaining Ready-table
-items (R-007, R-010, R-013, R-014, R-017, R-021, R-023, R-024, R-030, R-041)
-are non-blocking. This session's focus was the agentic layer, prompted by a
-direct ask to "build the agentic layer... check online to see if we're
-missing any other frameworks... make sure the agentic layer knows how to
-access things quickly in the db":
+The ROADMAP's Ready table is down to one item (R-027, HITRUST — genuinely
+blocked, no open source exists) as of 2026-09-09. Everything else that was
+open (R-007, R-010, R-013, R-014, R-017, R-021, R-023, R-024, R-030, R-041,
+plus R-047, found this session) closed in a second pass prompted by "lets get
+all of this completed":
+- **R-013/R-014/R-017/R-023** — `audit_repo.py`/`auditor/` core hardening:
+  git-history secret scanning (`--history`), `.soc2rc.yml` per-repo config,
+  skip-count transparency (oversized/binary files no longer silently
+  indistinguishable from "scanned clean"), and a warning when a report is
+  written inside the directory being scanned.
+- **R-010/R-021** — dependency scanning: workspace-wide (not just root)
+  across 6 ecosystems (PyPI/npm/crates.io/Go/RubyGems/Packagist), plus
+  `cargo audit` (RUSTSEC) as a fourth external engine alongside
+  Checkov/Semgrep/Trivy.
+- **R-030** — MITRE ATT&CK ICS (97) and Mobile (124) techniques indexed as
+  their own framework families, alongside the existing Enterprise (697).
+- **R-041** — retried failed document caches (155/167 now cached) and
+  manually verified all 21 "suspect landing page" flags from R-040: 16 were
+  real access-walls/bot-blocks (deleted), 5 were genuinely real content
+  (kept); added `_looks_blocked()` so future runs catch these automatically.
+- **R-047** — a real bug found by live-testing the agentic layer, not a unit
+  test: semantic search over the ~248 SCF-crosswalk families was
+  near-useless (their indexed text is bare clause numbers). Fixed with an
+  exact token-join through the SCF's own shared control-ID structure
+  (`scf_crosswalk_tokens`, 75,924 rows) instead of embedding similarity —
+  `crosswalk_control()` now picks the right method automatically per target.
+- **R-007** — the audit engine (previously explicitly out-of-scope for
+  `docs/architecture/SYSTEM.md`) now has its own sibling Contract Tree at
+  `docs/architecture-engine/`. Found and worked around two real parser
+  quirks in `recurspec` 0.2.0 along the way (see ROADMAP R-007's evidence
+  column) — both fixed by adjusting this project's SYSTEM.md formatting,
+  not by patching the tool.
+
+Prior round (still current): the agentic layer, prompted by "build the
+agentic layer... check online to see if we're missing any other
+frameworks... make sure the agentic layer knows how to access things
+quickly in the db":
 - **`scripts/vuln_intel.py`** — free CISA KEV / FIRST.org EPSS / NVD API 2.0
   client with a local TTL cache (R-042). Answers "is this OSV finding
   actually being exploited," which OSV alone doesn't.

@@ -53,9 +53,17 @@ def print_text(report: dict, use_color: bool):
         return f"{ANSI[sev]}[{sev}]{ANSI['reset']}"
 
     print(f"SOC 2 audit of {report['target']}")
-    print(f"Files scanned: {report['files_scanned']}\n")
+    print(f"Files scanned: {report['files_scanned']}")
+    skipped = report.get("skipped") or {}
+    skip_total = sum(skipped.values())
+    if skip_total:
+        parts = ", ".join(f"{n} {reason}" for reason, n in skipped.items() if n)
+        print(f"Files skipped: {skip_total} ({parts}) - not scanned, not \"scanned clean\"")
+    print()
     for f in report["findings"]:
         ctx = " (test/example context)" if f.in_test_context else ""
+        if f.historical:
+            ctx += f" (history: commit {f.commit})" if f.commit else " (history)"
         print(f"{paint(f.severity):<22} {f.rule.id} {f.rule.name}"
               f" [{', '.join(rule_frameworks(f.rule))}]{ctx}")
         print(f"    {f.file}:{f.line}")
@@ -119,6 +127,8 @@ def to_sarif(report: dict) -> str:
 
 def to_markdown(report: dict) -> str:
     s = report["summary"]
+    skipped = report.get("skipped") or {}
+    skip_total = sum(skipped.values())
     lines = [
         "# AuditForge - SOC 2 Compliance Audit Report",
         "",
@@ -127,8 +137,11 @@ def to_markdown(report: dict) -> str:
         f"- **Findings:** {s['total']} "
         f"(Critical: {s['CRITICAL']}, High: {s['HIGH']}, "
         f"Medium: {s['MEDIUM']}, Low: {s['LOW']})",
-        "",
     ]
+    if skip_total:
+        parts = ", ".join(f"{n} {reason}" for reason, n in skipped.items() if n)
+        lines.append(f"- **Skipped (not scanned):** {skip_total} ({parts})")
+    lines.append("")
     for sev in SEVERITIES:
         group = [f for f in report["findings"] if f.severity == sev]
         if not group:

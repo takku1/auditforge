@@ -76,9 +76,32 @@ CREATE TABLE IF NOT EXISTS build_info (
     dims INTEGER NOT NULL,
     built_at TEXT NOT NULL,
     control_count INTEGER NOT NULL,
-    document_chunk_count INTEGER NOT NULL
+    document_chunk_count INTEGER NOT NULL,
+    scf_token_count INTEGER NOT NULL DEFAULT 0
 );
+
+-- R-047: exact-match crosswalk through the SCF's own control-ID structure,
+-- fixing what semantic search over SCF_* families can't do (their indexed
+-- "text" is bare clause numbers, not descriptions - nothing meaningful to
+-- embed). Every SCF_* family shares the same scf_id for the same
+-- underlying SCF control (e.g. "GOV-01" maps to some ISO 27001 clause AND
+-- some NIST 800-53 clause under that identical scf_id) - so tokenizing each
+-- family's clause-list value and indexing token -> (family, scf_id) lets a
+-- real standard's own control ID (e.g. "AC-2") be joined straight through
+-- to any other SCF-mapped standard's clause, deterministically.
+CREATE TABLE IF NOT EXISTS scf_crosswalk_tokens (
+    token TEXT NOT NULL,
+    scf_family TEXT NOT NULL,
+    scf_id TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scf_tokens_token ON scf_crosswalk_tokens(token);
 """
+
+_SCF_TOKEN_STRIP = ",;:"
+
+
+def _tokenize_scf_clause(text: str) -> "list[str]":
+    return [t.strip(_SCF_TOKEN_STRIP).upper() for t in text.split() if t.strip(_SCF_TOKEN_STRIP)]
 
 
 def _load_model():
@@ -254,22 +277,47 @@ def build(batch_size: int = 64) -> dict:
     conn.commit()
     print(f"[i] document chunks indexed: {doc_count}")
 
+    scf_token_count = _build_scf_token_index(conn)
+    conn.commit()
+    print(f"[i] SCF crosswalk tokens indexed: {scf_token_count}")
+
     import datetime
     conn.execute(
-        "INSERT INTO build_info (id, model, dims, built_at, control_count, document_chunk_count) "
-        "VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+        "INSERT INTO build_info (id, model, dims, built_at, control_count, document_chunk_count, scf_token_count) "
+        "VALUES (1, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
         "model=excluded.model, dims=excluded.dims, built_at=excluded.built_at, "
-        "control_count=excluded.control_count, document_chunk_count=excluded.document_chunk_count",
+        "control_count=excluded.control_count, document_chunk_count=excluded.document_chunk_count, "
+        "scf_token_count=excluded.scf_token_count",
         (EMBEDDING_MODEL, EMBEDDING_DIM, datetime.datetime.now(datetime.timezone.utc).isoformat(),
-         control_count, doc_count),
+         control_count, doc_count, scf_token_count),
     )
     conn.commit()
     conn.close()
 
     elapsed = time.time() - t0
-    print(f"vector_index.db written: {control_count} controls, {doc_count} document chunks "
-          f"({elapsed:.1f}s total)")
-    return {"controls": control_count, "document_chunks": doc_count, "elapsed_s": elapsed}
+    print(f"vector_index.db written: {control_count} controls, {doc_count} document chunks, "
+          f"{scf_token_count} SCF crosswalk tokens ({elapsed:.1f}s total)")
+    return {"controls": control_count, "document_chunks": doc_count,
+            "scf_tokens": scf_token_count, "elapsed_s": elapsed}
+
+
+def _build_scf_token_index(conn) -> int:
+    """Populates scf_crosswalk_tokens from every SCF_*-prefixed control
+    already inserted into controls_meta this run - see R-047 / the module
+    docstring's design note above SCHEMA.
+    """
+    rows = conn.execute(
+        "SELECT control_id, framework, text FROM controls_meta WHERE framework LIKE 'SCF\\_%' ESCAPE '\\'"
+    ).fetchall()
+    n = 0
+    for control_id, framework, text in rows:
+        for token in _tokenize_scf_clause(text):
+            conn.execute(
+                "INSERT INTO scf_crosswalk_tokens (token, scf_family, scf_id) VALUES (?, ?, ?)",
+                (token, framework, control_id),
+            )
+            n += 1
+    return n
 
 
 def main() -> int:
