@@ -1,0 +1,107 @@
+OPEN DROP-IN SET — provenance (fetched 2026-09-20, uncommitted per license rule (a))
+Project .venv only. Nothing below was committed.
+
+1) references/samm/ — 303 files (top-level EN set of OWASP SAMM v2.0 Datamodel)
+   Source: https://github.com/OWASP/samm (archived 2022-05-17; canonical v2.0 model)
+   Dir: Supporting Resources/v2.0/Datamodel/Datafiles/ (top level; en/ de/ es/ are translations)
+   License: CC BY-SA 4.0 — evidence: owaspsamm.org footer "OWASP SAMM is published
+   under the CC BY-SA 4.0 license (https://creativecommons.org/licenses/by-sa/4.0/)".
+   NOTE: repo has NO LICENSE file and GitHub API license=null; attribution + ShareAlike
+   apply on redistribution. Live project moved to https://github.com/owaspsamm.
+   Parser fit (_parse_samm/_walk_named_descriptions): PARTIAL — 125/303 files index
+   (Function 5 + Question 90 + Stream 30, which carry name+description). The core model
+   is MISSED: Activity 90 (title+shortDescription/longDescription), Practice 60
+   (name+shortDescription/longDescription), Maturity 3 (number+description, no name key),
+   Answer 25 (id+values, no indexable text). Tuning: add shortDescription/longDescription
+   (+benefit?) to the description fallback chain; consider number as name fallback.
+
+2) references/nist-800-63-4/ — upstream-README.md + sp800-63.html, sp800-63a/b/c.html
+   Source: https://github.com/usnistgov/800-63-4 (default branch nist-pages), final.
+   Official versions are the PDFs at https://doi.org/10.6028/NIST.SP.800-63-4 (etc.);
+   this repo is NIST's faithful HTML representation (identical text, see upstream-README).
+   Online: https://pages.nist.gov/800-63-4/. License: US public domain (federal work;
+   repo carries no license file, API license=Other/NOASSERTION — standard for usnistgov).
+   Format finding: repo contains NO section markdown — only frontmatter/acknowledgements
+   .md; body content is per-section index.html + 4 volume HTML files (fetched here).
+   Parser fit (_parse_section_markdown nist80063, regex "(id \d+(\.\d+)+ title)" over *.md):
+   FAILS on real source — 0 files match glob, and HTML headings carry NO dotted numbers
+   (<h2/h3 id="slug" data-section="N">Title</h2>, e.g. id=aal1req "Authenticator and
+   Verifier Requirements"). Tuning: new HTML pass (h-tag + id slug + data-section +
+   first <p>), or a volume-HTML→numbered-md pre-step. Official PDFs (csrc/doi) remain
+   a manual fallback (not fetched here).
+
+3) references/cisa-cpg/ — CISA-CPG-2.0-report-naesb-mirror.pdf (1.3 MB, 36 pp) + cpg-2.0.csv
+   Official source: https://www.cisa.gov/cybersecurity-performance-goals-2-0-cpg-2-0
+   (inline goal listing; verified 34 goals, Govern/Identify/Protect/Detect/Respond/Recover).
+   cisa.gov blocks datacenter curl (403/Akamai) so no file could be pulled from cisa.gov
+   directly; PDF is a mirror of the federal report at https://www.naesb.org/pdf4/weq_bps_css121525w4.pdf
+   — verified content: "Cross-Sector Cybersecurity Performance Goals, Version 2.0,
+   December 2025, CISA", TLP:CLEAR. License: US public domain (federal work, TLP:CLEAR).
+   cpg-2.0.csv (id,title,description; 34 rows, no empties) derived from the OFFICIAL
+   cisa.gov page text (goal heading + Outcome bullet). Cross-check 1.D against the report
+   §Changes ("1.I merged into 1.D"). If CISA publishes an official xlsx/worksheet, prefer it.
+   Parser fit (_parse_reference_csv cisa_cpg): FULL — 34/34 indexed, sample entries verified.
+
+4) references/cvss-v4/ — cvss_config.js, cvss_lookup.js, cvss_score.js, cvss_details.js,
+   app.js, LICENSE, README.md + derived cvss-v4-metrics.json
+   Source: https://github.com/FIRSTdotorg/cvss-v4-calculator (main branch).
+   License: BSD-2-Clause — full body saved as LICENSE (Copyright (c) 2023 FIRST.ORG,
+   Inc., Red Hat, and contributors). Code/schema only; NO spec prose fetched.
+   cvss-v4-metrics.json ({"metrics":[{id,name,description,group}]}, 32 metrics) derived
+   from cvss_config.js `short` + display name + `tooltip` strings (BSD-covered code
+   strings; JS→JSON normalization: fixed invalid \“ \” escapes + 1 trailing comma).
+   Parser fit (_parse_cvss): FULL on the derived JSON — 32/32 (AV..E incl. modified +
+   environmental + supplemental). Raw upstream is .js (glob *.json finds nothing), so
+   keep the derivation step or extend the parser to JS.
+
+5) references/ccm-bundle/ — CCMv4.1.0+CAIQv4.1.0-machine_readable_bundle-generated_at_2026_02_20.zip
+   (852 KB) + ccm-v4.1.0-minimal.json
+   Source (no-account direct link, CSA-authorized): https://cloudsecurityalliance.org/download/artifacts/ccm-machine-readable-bundle-json-yaml-oscal
+   ("Prefer to access this resource without an account? Download it now").
+   Bundle: CCM v4.1.0 + CAIQ v4.1.0 (json/yaml/oscal sub-bundles; JSON primary-dataset
+   schema: {name,acronym,version,url,domains[{id,title,controls[{id,title,specification}]}]},
+   17 domains / 207 controls).
+   License: NO license file inside the bundle; © Cloud Security Alliance — Fair-Use-only
+   (ROADMAP RF-002), no redistribution. Minimal ingest ccm-v4.1.0-minimal.json = IDs +
+   short titles only (207 controls, no `specification` prose), full archive uncommitted.
+   Parser fit (_parse_reference_json ref_ccm): PARTIAL — indexes the 17 DOMAINS only
+   (domains carry id+title), misses all 207 nested controls; `specification` key unread.
+   Tuning: recurse into domains[].controls + read specification as desc (or titles-only
+   for the minimal file). PATH NOTE: task said ccm-bundle/ but parser reads
+   references/csa-ccm/ — implementer must reconcile (move minimal JSON or repoint).
+
+GATED — shopping list only (NOT attempted, no credentialless download exists):
+ a) HITRUST CSF control statements → portal: HITRUST MyCSF (https://hitrustalliance.net /
+    MyCSF subscription agreement required, ROADMAP R-027; current line v11.7.0+) — export
+    the requirement-statement listing (CSV) yourself → drop-in: references/hitrust-csf/*.csv
+    (header row, ID + title columns).
+ b) CIS Controls v8.1 safeguards → portal: https://learn.cisecurity.org/cis-controls-download
+    (registration form; also https://www.cisecurity.org/controls/v8-1 and CIS WorkBench
+    https://workbench.cisecurity.org/ Excel/JSON exports, account-gated; no redistribution
+    per ROADMAP RF-001) — download the master Excel yourself → drop-in:
+    references/cis-controls/*.csv (header row, safeguard ID + title columns).
+ c) CISA CPG 2.0 official xlsx/worksheet if published later → https://www.cisa.gov/cpg
+    (blocked to automated fetch here; manual download) → references/cisa-cpg/.
+
+VALIDATION RUNS (project .venv python, scripts/sync_frameworks.py unmodified):
+ _parse_samm → 125 (Function+Question+Stream only; 90 Activity + 60 Practice missed)
+ _parse_section_markdown(nist80063) → 0 (no *.md in real source; HTML only)
+ _parse_cvss → 32/32 on derived JSON (0 on raw .js)
+ _parse_reference_csv(cisa_cpg) → 34/34 on derived CSV
+ _parse_reference_json(ref_ccm on bundle primary-dataset.json) → 17 domains, 0 controls
+
+FINAL VERIFICATION (2026-09-20, against regenerated framework_metadata.json:
+43670 controls / 317 families) — supersedes the tuning notes above:
+ _parse_samm -> 278 indexed (Activity/Practice shortDescription chain + typed
+   PracticeLevel/MaturityLevel handling; AnswerSet skipped by design)
+ _parse_section_markdown + HTML pass (nist80063) -> 356 sections from the 4
+   volume HTML files (h-tag id slug + data-section + first <p>)
+ _parse_cvss -> 32/32 (derived JSON and raw cvss_config.js both parse)
+ _parse_reference_csv(cisa_cpg) -> 34/34
+ _parse_reference_json(ref_ccm on bundle primary-dataset.json) -> 207 controls
+   across 17 domains (recursive domains[].controls[] descent; minimal
+   IDs+titles file also parses)
+ SAF baselines -> SAF_AWS 64, SAF_AZURE 159, SAF_EKS 35, SAF_GCP 60, SAF_GKE 25
+ Empty gated slots (bsimm/cis-controls/hitrust-csf/csa-caiq/csa-aicm) -> 0
+   controls, parsers noop cleanly; activation covered by synthetic-fixture
+   tests in scripts/test_sync_frameworks.py (never real gated text).

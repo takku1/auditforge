@@ -13,7 +13,8 @@ $ignore = Get-Content (Join-Path $root '.gitignore') -Raw
 $cloneDirs = @('asvs', 'attack-stix-data', 'comp-ai', 'compliance-as-code', 'comply',
     'gdpr-checklist', 'juice-shop', 'jupiterone-policies', 'nist-csf',
     'opengrc', 'oscal-content', 'owasp-top10', 'probo',
-    'secure-controls-framework', 'security-templates')
+    'secure-controls-framework', 'security-templates',
+    'fedramp-rules', 'mitre-saf-cis')
 foreach ($d in $cloneDirs) {
     if ($ignore -notmatch [regex]::Escape("$d/")) { Write-Host "MISS .gitignore rule: $d/"; $fail++ }
 }

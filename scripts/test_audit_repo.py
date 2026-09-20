@@ -149,6 +149,29 @@ class TestNoiseControls(AuditFixture):
         report = self.audit(excludes=["generated/*"])
         self.assertEqual(report["summary"]["total"], 0)
 
+    def test_derived_document_cache_excluded(self):
+        # scripts/document_cache/ is derived, gitignored third-party HTML -
+        # its PII-shaped content must not trip the self-audit gate.
+        self.write("document_cache/nist-800-53.html",
+                   "<html><body>Contact jane.doe@acmewidgets.io re 123-45-6789</body></html>\n")
+        report = self.audit()
+        self.assertEqual([f for f in report["findings"] if f.rule.id == "PII001"], [])
+
+    def test_derived_sqlite_db_excluded(self):
+        self.write("document_catalog.db", "contact jane.doe@acmewidgets.io\n")
+        report = self.audit()
+        self.assertEqual(report["summary"]["total"], 0)
+
+    def test_derived_cache_does_not_fail_high_gate(self):
+        self.write("document_cache/nist-800-53.html",
+                   "<html><body>Contact jane.doe@acmewidgets.io re 123-45-6789</body></html>\n")
+        self.write("document_catalog.db", "contact jane.doe@acmewidgets.io\n")
+        import contextlib, io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = audit_repo.main([self.root, "--fail-on", "HIGH"])
+        self.assertEqual(rc, 0)
+
     def test_min_severity_filter(self):
         self.write("app/api.ts", 'const a = "http://api.acmewidgets.io";\n')  # MEDIUM
         report = self.audit(min_severity="HIGH")

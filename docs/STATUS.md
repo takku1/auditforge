@@ -107,7 +107,11 @@ crosswalk workbook via openpyxl (248 focal-document frameworks - ISO
 SOX, GLBA, NYDFS 500, LGPD, PIPEDA, and ~230 more - each keyed by SCF control
 ID to that framework's mapped clause), and FedRAMP 20x's Key Security
 Indicators from `github.com/FedRAMP/rules` (46 indicators, each mapped to its
-NIST 800-53 control IDs). Only OWASP Top 10:2025 stays a presence-only flag
+NIST 800-53 control IDs), and MITRE SAF CIS baselines from
+`github.com/mitre` (`mitre-saf-cis/`: AWS foundations, Azure foundations, and
+EKS InSpec profiles - Apache-2.0, 258 controls across 3 families, each
+carrying its title, overview prose, and mapped NIST 800-53 IDs). Only OWASP
+Top 10:2025 stays a presence-only flag
 (its OSIB export is a CWE-linkage graph, not a flat control list -
 deliberate, not an oversight). `scripts/build_rulepack.py` is a separate tool
 that emits a host-posture rule pack (`ronin.rulepack/v1`) consumed by the
@@ -150,6 +154,17 @@ Python deps live in a project-local `.venv/` — never the system Python.
   error — `git ls-remote` returns "Repository not found". FedRAMP has moved
   to a "20x" Key Security Indicators model; `github.com/FedRAMP/rules` is its
   actual current machine-readable source and is now cloned as `fedramp-rules/`.
+- 2026-09-20: Wired MITRE SAF CIS baselines (`mitre-saf-cis/`,
+  `github.com/mitre` Apache-2.0 - license text verified before cloning):
+  `aws-foundations-cis-baseline` (64 controls), `azure-foundations-cis-baseline`
+  (159), `eks-cis-cluster-baseline` (35), parsed by
+  `sync_frameworks.py::_parse_saf_inspec()` into `SAF_AWS`/`SAF_AZURE`/`SAF_EKS`
+  families (258 controls; `framework_metadata.json` now 42,678 controls / 310
+  families). CIS Controls OSCAL (proprietary CIS Terms of Use) and the CSA CCM
+  bundle (Fair-Use-only, gated zip) were deliberately NOT fetched - kill-switch
+  blocks stand. HITRUST CSF has no machine-readable open source and no SCF
+  focal-document column (workbook scanned: 0 HITRUST rows of 255) - full text
+  stays out per the MyCSF gate (ROADMAP R-027).
 
 ## Deprecated/Legacy
 - `nist-csf/`, `gdpr-checklist/`, `security-templates/` are legacy/reference
@@ -158,4 +173,4 @@ Python deps live in a project-local `.venv/` — never the system Python.
   control data.
 
 ## Last Updated
-2026-09-09
+2026-09-20

@@ -80,6 +80,7 @@ Exit 0 = all sources fresh. Any FAILED row: fix or re-run when online.
 | `owasp-top10/` | OWASP Top 10:2025 (OSIB YAML) |
 | `secure-controls-framework/` | SCF crosswalk xlsx (~250 focal-document frameworks; CC BY-ND, internal use) |
 | `fedramp-rules/` | FedRAMP 20x consolidated rules (JSON) - Key Security Indicators mapped to NIST 800-53 controls (clone; public domain, US federal work) |
+| `mitre-saf-cis/` | MITRE SAF CIS baselines (InSpec `controls/*.rb`: AWS/Azure/GCP foundations, EKS/GKE - Apache-2.0, local internal use) |
 | `comply/`, `jupiterone-policies/` | Policy wording gold standards (clones) |
 | `probo/`, `comp-ai/`, `opengrc/` | AI-native / self-hosted GRC platforms (clones) |
 | `nist-csf/`, `gdpr-checklist/`, `security-templates/` | Legacy/reference KBs (clones) |

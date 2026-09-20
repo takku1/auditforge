@@ -17,6 +17,7 @@ probo/
 secure-controls-framework/
 security-templates/
 fedramp-rules/
+mitre-saf-cis/
 
 # generated / ephemeral
 reports/
@@ -60,3 +61,6 @@ scripts/vuln_intel_cache.db
 .recurspec/
 .claude-flow/
 .claude/scheduled_tasks.lock
+
+# CSA CCM machine-readable bundle (no-account direct download, CSA (c) all rights reserved - local use only, never commit, never redistribute)
+references/ccm-bundle/

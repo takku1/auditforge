@@ -33,6 +33,11 @@ $sources = [ordered]@{
     'owasp-top10'               = 'https://github.com/OWASP/Top10.git'
     'secure-controls-framework' = 'https://github.com/securecontrolsframework/securecontrolsframework.git'
     'fedramp-rules'             = 'https://github.com/FedRAMP/rules.git'
+    'mitre-saf-cis/aws-foundations-cis-baseline'   = 'https://github.com/mitre/aws-foundations-cis-baseline.git'
+    'mitre-saf-cis/azure-foundations-cis-baseline' = 'https://github.com/mitre/azure-foundations-cis-baseline.git'
+    'mitre-saf-cis/eks-cis-cluster-baseline'       = 'https://github.com/mitre/eks-cis-cluster-baseline.git'
+    'mitre-saf-cis/gcp-cis-benchmark'                = 'https://github.com/mitre/inspec-gcp-cis-benchmark.git'
+    'mitre-saf-cis/gke-cis-benchmark'                = 'https://github.com/mitre/inspec-gke-cis-benchmark.git'
     'juice-shop'                = 'https://github.com/juice-shop/juice-shop.git'
 }
 
@@ -48,6 +53,8 @@ foreach ($name in $sources.Keys) {
             $results += [pscustomobject]@{ Repo = $name; LastCommit = '-'; Status = 'SKIPPED (exists, not a git repo)' }
             continue
         }
+        $parent = Split-Path $dir -Parent
+        if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent | Out-Null }
         git clone --depth 1 --single-branch --quiet $url $dir 2>$null
         if ($LASTEXITCODE -eq 0) {
             $last = git -C $dir log -1 --format='%cs' 2>$null

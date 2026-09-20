@@ -17,6 +17,9 @@ SKIP_DIRS = {
     "dist", "build", "out", "target", ".next", ".nuxt", ".venv", "venv",
     "env", ".tox", ".mypy_cache", ".pytest_cache", "coverage", ".idea",
     ".vscode", "bin", "obj", ".terraform", "graphify-out",
+    # Derived local cache of third-party regulatory HTML (see .gitignore):
+    # not project-owned code, so the self-audit gate must not scan it.
+    "document_cache",
 }
 SKIP_FILES = {
     "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "poetry.lock",
@@ -27,6 +30,9 @@ SKIP_EXTENSIONS = {
     ".gz", ".tar", ".woff", ".woff2", ".ttf", ".eot", ".mp4", ".mp3",
     ".exe", ".dll", ".so", ".dylib", ".class", ".jar", ".pyc", ".min.js",
     ".map", ".lock", ".sum",
+    # Derived SQLite stores (document_catalog.db, vector_index.db - see
+    # .gitignore): chunked third-party text, not project-owned code.
+    ".db", ".sqlite", ".sqlite3",
 }
 MAX_FILE_BYTES = 1_500_000
 SUPPRESS_TOKEN = "soc2-ignore"

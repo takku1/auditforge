@@ -146,6 +146,68 @@ MANUAL_DOCUMENTS = [
                          "Supersedes the old Rev5 GSA/fedramp-automation baseline-profile repo, "
                          "which no longer exists (404 as of 2026-09-09, see ROADMAP RF-003).",
     },
+    {
+        "fdi": "manual-owasp-samm-2-0", "name": "OWASP Software Assurance Maturity Model 2.0",
+        "issuing_body": "OWASP", "geography": "General",
+        "source_url": "https://owaspsamm.org/model/",
+        "family_key": "SAMM", "license_status": "free_to_access",
+        "license_note": "CC BY-SA 4.0 (see the v2.0 core model document); "
+                        "control text is indexed only from a user-supplied drop-in "
+                        "(references/samm/), never auto-fetched.",
+    },
+    {
+        "fdi": "manual-nist-800-63-4", "name": "NIST SP 800-63-4 Digital Identity Guidelines",
+        "issuing_body": "NIST", "geography": "US",
+        "source_url": "https://csrc.nist.gov/pubs/sp/800/63/4/final",
+        "family_key": "NIST80063", "license_status": "public_domain",
+        "license_note": SOURCE_LICENSE["NIST"][1],
+    },
+    {
+        "fdi": "manual-first-cvss-4-0", "name": "FIRST Common Vulnerability Scoring System v4.0",
+        "issuing_body": "FIRST", "geography": "General",
+        "source_url": "https://www.first.org/cvss/v4-0/",
+        "family_key": "CVSS", "license_status": "free_to_access",
+        "license_note": "Spec page is free to access; metric code/schema from "
+                        "github.com/FIRSTdotorg/cvss-v4-calculator (BSD-2-Clause). "
+                        "Indexed from a user-supplied drop-in (references/cvss-v4/).",
+    },
+    {
+        "fdi": "manual-bsimm", "name": "Building Security In Maturity Model (BSIMM)",
+        "issuing_body": "BSIMM", "geography": "General",
+        "source_url": "https://www.bsimm.com/",
+        "family_key": "BSIMM", "license_status": "free_to_access",
+        "license_note": "CC BY-SA; free download (confirm current bsimm.com terms "
+                        "before scripting any fetch). Indexed only from a "
+                        "user-supplied drop-in (references/bsimm/).",
+    },
+    {
+        "fdi": "manual-hitrust-csf", "name": "HITRUST CSF",
+        "issuing_body": "HITRUST", "geography": "US",
+        "source_url": "https://hitrustalliance.net/",
+        "family_key": "HITRUST", "license_status": "copyrighted_registration_required",
+        "license_note": "Full framework is gated behind MyCSF plus an eligibility "
+                        "review (see ROADMAP R-027). Catalog/metadata entry only - "
+                        "never fetched; control text only from a user-supplied "
+                        "drop-in (references/hitrust-csf/).",
+    },
+    {
+        "fdi": "manual-csa-caiq-4", "name": "CSA Consensus Assessments Initiative Questionnaire v4",
+        "issuing_body": "CSA", "geography": "General",
+        "source_url": "https://cloudsecurityalliance.org/artifacts/consensus-assessments-initiative-questionnaire",
+        "family_key": "CAIQ", "license_status": "unknown",
+        "license_note": "Form-gated download under a personal/noncommercial/no-modify "
+                        "license. Catalog/metadata entry only - never fetched; "
+                        "control text only from a user-supplied drop-in (references/csa-caiq/).",
+    },
+    {
+        "fdi": "manual-csa-aicm", "name": "CSA AI Controls Matrix",
+        "issuing_body": "CSA", "geography": "General",
+        "source_url": "https://cloudsecurityalliance.org/artifacts/artificial-intelligence-controls-matrix",
+        "family_key": "AICM", "license_status": "unknown",
+        "license_note": "Form-gated download under a personal/noncommercial-only "
+                        "license. Catalog/metadata entry only - never fetched; "
+                        "control text only from a user-supplied drop-in (references/csa-aicm/).",
+    },
 ]
 
 
