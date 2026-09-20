@@ -50,7 +50,48 @@ class UniversalAuditor:
 
     def run_network_audit(self, override_targets: Optional[List[str]] = None):
         targets = override_targets if override_targets is not None else self.config.get("network_targets", [])
-        self.findings.extend(scanners.run_network_audit(targets, self.mapping_data))
+        self.findings.extend(scanners.run_network_audit(
+            targets, self.mapping_data,
+            dast_conf=self.config.get("dast", {}),
+            email_conf=self.config.get("email_auth", {})))
+
+    def run_email_audit(self):
+        conf = self.config.get("email_auth", {})
+        if not conf.get("enabled"):
+            return
+        domains = conf.get("domains", []) or []
+        if not domains:
+            return
+        try:
+            timeout = int(conf.get("timeout", 10))
+        except (ValueError, TypeError):
+            timeout = 10
+        self.findings.extend(scanners.run_email_auth_audit(
+            domains, self.mapping_data,
+            selectors=conf.get("selectors"), timeout=timeout))
+
+    def run_cloud_posture(self):
+        conf = self.config.get("cloud", {})
+        self.findings.extend(scanners.run_cloud_posture(conf, self.mapping_data))
+
+    def run_sbom_audit(self):
+        sbom_conf = self.config.get("sbom", {"enabled": True})
+        licenses_conf = self.config.get("licenses", {})
+        self.findings.extend(scanners.run_sbom_audit(
+            self.target_dir, sbom_conf, licenses_conf, self.mapping_data))
+
+    def run_nuclei(self, override_targets: Optional[List[str]] = None):
+        conf = self.config["tools"].get("nuclei", {})
+        targets = override_targets if override_targets is not None else self.config.get("network_targets", [])
+        self.findings.extend(scanners.run_nuclei(targets, self.mapping_data, conf))
+
+    def run_scorecard(self):
+        conf = self.config["tools"].get("scorecard", {"enabled": True})
+        self.findings.extend(scanners.run_scorecard(self.target_dir, conf, self.mapping_data))
+
+    def run_trufflehog(self):
+        conf = self.config["tools"].get("trufflehog", {"enabled": True})
+        self.findings.extend(scanners.run_trufflehog(self.target_dir, conf, self.mapping_data))
 
     def generate_report(self, output_format: str) -> str:
         summary = {

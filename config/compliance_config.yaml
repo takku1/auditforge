@@ -47,6 +47,26 @@ tools:
     # Runs entirely locally using the RUSTSEC advisory database (OSS).
     # Requires the `cargo-audit` binary (`cargo install cargo-audit`).
     # Available at: https://github.com/rustsec/rustsec/tree/main/cargo-audit
+  nuclei:
+    enabled: true
+    # Live-target template scanning (OSS). Requires the `nuclei` binary.
+    # Runs against network_targets (placeholder example.com defaults are never scanned).
+    # Available at: https://github.com/projectdiscovery/nuclei
+    severity: "critical,high,medium"  # optional filter: subset of critical,high,medium,low,info
+  scorecard:
+    enabled: true
+    # OpenSSF Scorecard supply-chain posture incl. SLSA-relevant checks (OSS).
+    # Requires the `scorecard` binary; derives the GitHub slug from the target's
+    # git origin (non-GitHub checkouts skip cleanly). Auth comes from
+    # GITHUB_AUTH_TOKEN env only, never this file.
+    # Available at: https://github.com/ossf/scorecard
+    min_score: 7  # checks scoring below this (0-10 scale) produce findings
+  trufflehog:
+    enabled: true
+    # Verified-secret scan of the working tree (OSS). Requires the `trufflehog` binary.
+    # Reports only verifier-confirmed credentials; values never enter findings/logs.
+    # Available at: https://github.com/trufflesecurity/trufflehog
+
     
 # -----------------------------------------------------------------------------
 # DAST & LIVE NETWORK AUDITING
@@ -56,6 +76,46 @@ tools:
 network_targets:
   - "https://example.com"
   - "https://api.example.com/health"
+
+# -----------------------------------------------------------------------------
+# DAST CRAWL/FUZZ + EMAIL AUTH (R-052 / R-055)
+# Authenticated DAST is env-only (DAST_AUTH_HEADER / DAST_AUTH_COOKIE) -
+# never put session credentials in this file. Unauthenticated is default.
+# -----------------------------------------------------------------------------
+dast:
+  enabled: true
+  crawl: true        # same-origin link-follow, GET-only
+  max_depth: 2       # link-follow depth bound (also DAST_MAX_DEPTH)
+  max_pages: 20      # total pages bound (also DAST_MAX_PAGES)
+  fuzz: true         # light query-param probes, GET-only (also DAST_MAX_FUZZ)
+  max_fuzz_requests: 20
+email_auth:
+  enabled: true      # SPF/DKIM/DMARC TXT checks for each network-target domain
+  selectors: ["default", "google", "selector1", "selector2", "k1"]
+  domains: []        # extra domains beyond network-target hosts
+
+# -----------------------------------------------------------------------------
+# LIVE CLOUD POSTURE (R-051) - read-only polling, env creds only.
+# Absent creds/SDKs skip gracefully, never fail. Snapshot baseline enables
+# diff-on-rerun drift detection.
+# -----------------------------------------------------------------------------
+cloud:
+  enabled: true
+  providers: ["aws", "gcp", "azure"]
+  baseline_file: "reports/cloud_posture_baseline.json"
+
+# -----------------------------------------------------------------------------
+# SBOM + LICENSE COMPLIANCE (R-054)
+# -----------------------------------------------------------------------------
+sbom:
+  enabled: true
+  format: "cyclonedx"  # or "spdx"
+  output: "reports/sbom.cyclonedx.json"
+licenses:
+  allowlist: ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC",
+    "Python-2.0", "CC0-1.0", "Unlicense"]
+  flag_unknown_licenses: false  # true = LOW finding per undeclared license
+  overrides: {}      # {package-name: SPDX-id} for licenses manifests omit
 
 # -----------------------------------------------------------------------------
 # GLOBAL SETTINGS

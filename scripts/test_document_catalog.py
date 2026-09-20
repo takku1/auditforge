@@ -254,3 +254,43 @@ class TestCacheAll(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestPlatformManualDocuments(unittest.TestCase):
+    # R-069/R-070/R-104/R-105: platform/regulation catalog entries carry
+    # real remote URLs for re-cache; no control text is parsed for CIRCIA
+    # (rule not final) or CMMC guides (assessment prose, not a catalog).
+    EXPECTED = {
+        "manual-disa-stig-library": "https://public.cyber.mil/stigs/downloads/",
+        "manual-doe-c2m2-2-1": "https://www.energy.gov/sites/default/files/2022-06/",
+        "manual-cisa-circia": "https://www.cisa.gov/",
+        "manual-cmmc-ag-l1": "https://dodcio.defense.gov/",
+        "manual-cmmc-ag-l2": "https://dodcio.defense.gov/",
+        "manual-cmmc-scoping-l1": "https://dodcio.defense.gov/",
+        "manual-cmmc-scoping-l2": "https://dodcio.defense.gov/",
+    }
+
+    def test_platform_documents_present_with_remote_urls(self):
+        by_fdi = {d["fdi"]: d for d in bdc.MANUAL_DOCUMENTS}
+        for fdi, prefix in self.EXPECTED.items():
+            self.assertIn(fdi, by_fdi)
+            self.assertTrue(by_fdi[fdi]["source_url"].startswith(prefix), fdi)
+            self.assertIn(by_fdi[fdi]["license_status"],
+                          ("public_domain", "free_to_access"))
+
+    def test_platform_documents_build_into_db(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "catalog.db"
+            with patch.object(bdc, "_rows_from_scf", return_value=[]), \
+                 patch.object(bdc, "_rows_from_compliance_as_code", return_value=[]):
+                bdc.build(db_path)
+            conn = sqlite3.connect(str(db_path))
+            try:
+                for fdi in self.EXPECTED:
+                    row = conn.execute(
+                        "SELECT source_url FROM documents WHERE fdi = ?",
+                        (fdi,)).fetchone()
+                    self.assertIsNotNone(row, fdi)
+                    self.assertTrue(row[0].startswith("https://"), fdi)
+            finally:
+                conn.close()

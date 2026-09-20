@@ -40,7 +40,23 @@
         "NET_CSP_MISSING": ["SOC2:CC7.1", "NIST:SI-10", "OWASP:A05:2021", "MITRE:T1189"],
         "NET_INFO_LEAK": ["SOC2:CC6.1", "NIST:CM-10", "AWS-WAF:SEC01", "MITRE:T1592"],
         "NET_REACHABILITY": ["SOC2:CC7.3", "NIST:IR-4", "AWS-WAF:REL01"],
-        "DEP_VULN": ["SOC2:CC8.1", "NIST:CM-3", "CIS:v8-14.1", "AWS-WAF:SEC01"]
+        "DEP_VULN": ["SOC2:CC8.1", "NIST:CM-3", "CIS:v8-14.1", "AWS-WAF:SEC01"],
+        "CLOUD_S3_PUBLIC": ["SOC2:CC6.1", "NIST:AC-3", "CIS:v8-3.3", "MITRE:T1530"],
+        "CLOUD_IAM_POLICY": ["SOC2:CC6.1", "NIST:IA-5", "CIS:v8-5.4"],
+        "CLOUD_STORAGE_PUBLIC": ["SOC2:CC6.1", "NIST:AC-3", "CIS:v8-3.3"],
+        "CLOUD_DRIFT": ["SOC2:CC7.2", "NIST:CM-3", "CIS:v8-14.1"],
+        "EMAIL_SPF_MISSING": ["SOC2:CC6.1", "NIST:SC-7", "CIS:v8-9.2"],
+        "EMAIL_DMARC_MISSING": ["SOC2:CC6.1", "NIST:SC-7", "CIS:v8-9.2"],
+        "EMAIL_DKIM_MISSING": ["SOC2:CC6.1", "NIST:SC-8", "CIS:v8-9.2"],
+        "DAST_REFLECTED_XSS": ["SOC2:CC8.1", "NIST:SI-10", "OWASP:A03:2021", "MITRE:T1189"],
+        "DAST_SQL_ERROR": ["SOC2:CC8.1", "NIST:SI-10", "OWASP:A03:2021", "MITRE:T1190"],
+        "DAST_PATH_TRAVERSAL": ["SOC2:CC8.1", "NIST:SI-10", "OWASP:A01:2021", "MITRE:T1083"],
+        "SBOM_COPYLEFT_LICENSE": ["SOC2:CC8.1", "NIST:CM-10", "CIS:v8-14.1"],
+        "SBOM_LICENSE_UNKNOWN": ["SOC2:CC8.1", "NIST:CM-10", "CIS:v8-14.1"],
+        "NUCLEI_TEMPLATE": ["SOC2:CC7.1", "NIST:SI-10", "OWASP:A05:2021"],
+        "SCORECARD_LOW_SCORE": ["SOC2:CC8.1", "NIST:CM-14", "CIS:v8-14.1"],
+        "TRUFFLEHOG_VERIFIED_SECRET": ["SOC2:CC6.1", "NIST:SC-28", "CIS:v8-3.3", "MITRE:T1552"]
+
     },
     "frameworks": {
         "SOC2": "Service Organization Control 2 (Security, Availability, Confidentiality)",

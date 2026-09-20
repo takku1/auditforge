@@ -1,6 +1,6 @@
 ---
 name: auditforge
-description: "SOC 2 / multi-framework GRC knowledge base and static compliance auditor for this repo - 42k+ controls across 300+ framework families (SOC2, NIST 800-53/171, CSF 2.0, ISO 27001, GDPR, HIPAA, PCI DSS, CIS, MITRE ATT&CK, FedRAMP 20x, ~300 more), semantic control search, a document catalog with cached full text, free vulnerability intelligence (CISA KEV/EPSS/NVD), and the audit_repo.py static scanner. Use when asked to audit code for compliance, look up or crosswalk a control/framework, check if a CVE is being actively exploited, or refresh the knowledge base."
+description: "SOC 2 / multi-framework GRC knowledge base and static compliance auditor for this repo - 47k+ controls across 330+ framework families (SOC2, NIST 800-53/171, CSF 2.0, ISO 27001, GDPR, HIPAA, PCI DSS, CIS, MITRE ATT&CK + ATLAS, OWASP Top 10 lane, NIST AI RMF/GenAI, C2M2, CWE/CAPEC/D3FEND, FedRAMP 20x, ~300 more), semantic control search, a document catalog with cached full text, free vulnerability intelligence (CISA KEV/EPSS/NVD), and the audit_repo.py static scanner. Use when asked to audit code for compliance, look up or crosswalk a control/framework, check if a CVE is being actively exploited, or refresh the knowledge base."
 trigger: /auditforge
 ---
 
@@ -44,7 +44,7 @@ all DERIVED - regenerate them, never hand-edit.
 ## CLI equivalents of the MCP tools
 
 ```
-# Semantic search over ~42k controls (same engine as search_controls MCP tool)
+# Semantic search over ~47k controls (same engine as search_controls MCP tool)
 .venv/Scripts/python.exe -c "
 import sys; sys.path.insert(0, 'scripts')
 from mcp_server import search_controls
@@ -81,18 +81,30 @@ print(c.execute('SELECT * FROM documents WHERE fdi = ?', ('<fdi>',)).fetchone())
   trustworthy as a citation. The latter is nearest-neighbor semantic
   similarity between two frameworks' control text - a starting point for
   human verification, never cite it as authoritative - and it only works
-  when BOTH sides have real control text. It does NOT work well against the
-  ~248 `SCF_*`-prefixed families (Secure Controls Framework crosswalk
-  columns, e.g. `SCF_GENERAL_ISO_27001_2022`): their indexed "text" is bare
-  clause numbers like `"4.2 4.2(a)"`, not descriptions, so there's nothing
-  meaningful to match against. Semantic search over those families is
-  equally unreliable. `get_control()` still works on them for an exact
-  lookup if you already know the SCF control ID.
+  when BOTH sides have real control text. Against the ~248 `SCF_*`-prefixed
+  families (Secure Controls Framework crosswalk columns, e.g.
+  `SCF_GENERAL_ISO_27001_2022`) it routes to an exact token-join through the
+  SCF's own shared control-ID structure (`scf_crosswalk_tokens`) instead of
+  embedding similarity, because their indexed "text" is bare clause numbers
+  like `"4.2 4.2(a)"`, not descriptions. Pure semantic search over those
+  families is still unreliable. `get_control()` still works on them for an
+  exact lookup if you already know the SCF control ID.
+- **New lanes since the agentic layer (all verified in
+  `framework_metadata.json`, 47,206 controls / 334 families)**: the OWASP
+  lane (`top10` flagship 2025 + API, MOBILE, LLM, AGENTIC, MCP, K8S, CICD,
+  MASVS families), MITRE ATLAS (AI adversary tactics), NIST AI RMF base
+  text (AIRMF) + GenAI Profile (GENAI), DOE C2M2 v2.1, CWE/CAPEC/D3FEND
+  machine-readable exports, CISA CPG 2.0, CVSS v4 metrics, SAMM v2, NIST SP
+  800-63-4, SAF RHEL 8/9 STIG baselines, and the DISA STIG XCCDF parser
+  (no-op until a quarterly zip is dropped into `references/disa-stig/`).
+  Catalog-only rows (no control text yet): CIRCIA, CMMC 2.0 assessment/scoping
+  guides, DISA STIG library, C2M2.
 - **Vulnerability prioritization**: OSV (via `universal_audit.py`) tells you
   a dependency has *a* known vulnerability; `kev_lookup`/`epss_lookup` tell
   you whether that vulnerability is one anyone is actually exploiting -
   combine both before recommending urgent remediation.
-- See `ROADMAP.md` for open gaps (HITRUST/SOC1 have no machine-readable
-  open source and are structurally unlike the other catalogued frameworks;
-  CIS Controls v8.1 master Excel is registration-gated) and
+- See `ROADMAP.md` for open gaps (HITRUST R-027 and SOC 1/SSAE 18 R-058
+  have no machine-readable open source; FFIEC IT Handbook R-057 still needs
+  parser wiring; CIS Controls v8.1 master Excel is registration-gated and
+  CCM v4.1 is indexed minimally as IDs+titles only under Fair-Use terms) and
   `docs/STATUS.md` for current architecture/phase.

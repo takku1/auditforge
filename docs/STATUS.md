@@ -5,15 +5,32 @@ The multi-framework knowledge base and static SOC 2 auditor (Phase 1) are
 stable. Phase 2 — an agentic layer on top of that knowledge base — is now
 live: an MCP server, a local semantic-search index, free vulnerability
 intelligence, and a standalone Claude Code skill, so an AI agent can query
-the ~42k-control knowledge base directly instead of an operator shelling out
+the ~47k-control knowledge base directly instead of an operator shelling out
 to CLIs and parsing text by hand.
 
 ## Active Focus
-The ROADMAP's Ready table is down to one item (R-027, HITRUST — genuinely
-blocked, no open source exists) as of 2026-09-09. Everything else that was
-open (R-007, R-010, R-013, R-014, R-017, R-021, R-023, R-024, R-030, R-041,
-plus R-047, found this session) closed in a second pass prompted by "lets get
-all of this completed":
+As of 2026-09-20 the ROADMAP's Ready table is down to four still-pending
+items, each with a cause: R-027 (HITRUST — genuinely blocked, no open
+machine-readable source exists), R-049 (freshness watch, no action yet —
+EU CRA obligations live 2026-09-11, CMMC Phase 2 mandatory cert starts
+2026-11-10), R-057 (FFIEC IT Examination Handbook booklets — needs
+document-cache + section-parser wiring), and R-058 (SOC 1 / SSAE 18 —
+AICPA-paywalled, no open source). Everything else landed, including the
+2026-09-20 full-capture expansion (`framework_metadata.json` verified at
+47,206 controls / 334 families): NIST AI 600-1 GenAI Profile (GENAI, 115),
+NIST AI RMF base text (AIRMF, 72), eight OWASP families (API, MOBILE, LLM,
+AGENTIC, MCP, K8S, CICD at 10 each; MASVS at 24; flagship Top 10:2025 as
+`top10`, 10), MITRE ATLAS (224), DOE C2M2 v2.1 (349), CWE (969) / CAPEC
+(615) / D3FEND (271), MITRE SAF RHEL 8/9 STIG baselines (SAF_RHEL8 375 /
+SAF_RHEL9 452), the DISA STIG XCCDF parser (no-op until a quarterly zip is
+dropped into `references/disa-stig/`), CISA CPG 2.0 (34), CVSS v4 metrics
+(32), SAMM v2 (278), NIST SP 800-63-4 (356), CCM v4.1 minimal IDs+titles
+(207, Fair-Use-only, bundle never committed), and document-catalog-only rows
+for CIRCIA, the CMMC 2.0 guides, the DISA STIG library, and C2M2.
+
+The earlier second pass prompted by "lets get all of this completed" closed
+(R-007, R-010, R-013, R-014, R-017, R-021, R-023, R-024, R-030, R-041, plus
+R-047, found this session):
 - **R-013/R-014/R-017/R-023** — `audit_repo.py`/`auditor/` core hardening:
   git-history secret scanning (`--history`), `.soc2rc.yml` per-repo config,
   skip-count transparency (oversized/binary files no longer silently
@@ -51,7 +68,7 @@ quickly in the db":
   actually being exploited," which OSV alone doesn't.
 - **`scripts/build_vector_index.py` + `scripts/mcp_server.py`** (R-043) —
   sqlite-vec semantic index (`scripts/vector_index.db`, gitignored/derived,
-  ~42k controls + 154 cached documents' chunked text, `BAAI/bge-small-en-v1.5`
+  ~47k controls + cached documents' chunked text, `BAAI/bge-small-en-v1.5`
   local CPU embeddings) behind an MCP server exposing `search_controls`,
   `get_control`, `list_frameworks`, `crosswalk_rule`, `crosswalk_control`,
   `search_documents`, `get_document`, `run_audit`, `kev_lookup`,
@@ -97,9 +114,11 @@ to SOC 2 Common Criteria controls (human/JSON/SARIF/markdown output, baseline
 diffing, CI gating). `scripts/universal_audit.py` + `auditor/` orchestrate
 external OSS tools (Checkov/Semgrep/Trivy/OSV) per
 `config/compliance_config.yaml`. `scripts/sync_frameworks.py` regenerates the
-derived `scripts/framework_metadata.json` control index from read-only KB
-clones — NIST OSCAL (800-53/800-171/CSF2), ASVS, MITRE ATT&CK Enterprise
-(697 techniques), every `compliance-as-code/controls/*.yml` file
+derived `scripts/framework_metadata.json` control index (47,206 controls /
+334 families as of 2026-09-20) from read-only KB clones — NIST OSCAL
+(800-53/800-171/CSF2), ASVS (442), MITRE ATT&CK Enterprise (697) + ICS (97)
++ Mobile (124) + MITRE ATLAS (224, YAML mappings, not STIX), every
+`compliance-as-code/controls/*.yml` file
 auto-discovered (47 families: CIS, STIG, Essential Eight, BSI, ANSSI, CCN,
 ISM, SRG, per-product NIST overlays), and the full Secure Controls Framework
 crosswalk workbook via openpyxl (248 focal-document frameworks - ISO
@@ -107,13 +126,20 @@ crosswalk workbook via openpyxl (248 focal-document frameworks - ISO
 SOX, GLBA, NYDFS 500, LGPD, PIPEDA, and ~230 more - each keyed by SCF control
 ID to that framework's mapped clause), and FedRAMP 20x's Key Security
 Indicators from `github.com/FedRAMP/rules` (46 indicators, each mapped to its
-NIST 800-53 control IDs), and MITRE SAF CIS baselines from
-`github.com/mitre` (`mitre-saf-cis/`: AWS foundations, Azure foundations, and
-EKS InSpec profiles - Apache-2.0, 258 controls across 3 families, each
-carrying its title, overview prose, and mapped NIST 800-53 IDs). Only OWASP
-Top 10:2025 stays a presence-only flag
-(its OSIB export is a CWE-linkage graph, not a flat control list -
-deliberate, not an oversight). `scripts/build_rulepack.py` is a separate tool
+NIST 800-53 control IDs), MITRE SAF baselines from
+`github.com/mitre` (`mitre-saf-cis/`: AWS (64), Azure (159), EKS (35), GCP
+(60), GKE (25) CIS benchmarks plus RHEL 8 (375) / RHEL 9 (452) STIG
+baselines - Apache-2.0, each carrying its title, overview prose, and mapped
+NIST 800-53 IDs), the OWASP lane (flagship Top 10:2025 as `top10` plus API,
+Mobile, LLM, Agentic, MCP, K8s, CI/CD Top 10s and MASVS, parsed from the
+cloned markdown via `_parse_owasp_categories`), NIST AI 600-1 GenAI Profile
+(GENAI, 115) and AI RMF 1.0 base text (AIRMF, 72) from reference PDFs, DOE
+C2M2 v2.1 (349), CWE (969) / CAPEC (615) / D3FEND (271) machine-readable
+exports, CISA CPG 2.0 (34), CVSS v4 metrics (32), SAMM v2 (278), NIST SP
+800-63-4 (356), CCM v4.1 minimal IDs+titles (207, Fair-Use-only), and the
+DISA STIG XCCDF parser over `references/disa-stig/` (no-op until a quarterly
+zip is dropped in; RHEL 8/9 overlap covered executably by the SAF baselines).
+`scripts/build_rulepack.py` is a separate tool
 that emits a host-posture rule pack (`ronin.rulepack/v1`) consumed by the
 sibling RoninAI project, tagged against NIST 800-171, SOC 2, and CIS control
 refs.
@@ -157,10 +183,13 @@ Python deps live in a project-local `.venv/` — never the system Python.
 - 2026-09-20: Wired MITRE SAF CIS baselines (`mitre-saf-cis/`,
   `github.com/mitre` Apache-2.0 - license text verified before cloning):
   `aws-foundations-cis-baseline` (64 controls), `azure-foundations-cis-baseline`
-  (159), `eks-cis-cluster-baseline` (35), parsed by
-  `sync_frameworks.py::_parse_saf_inspec()` into `SAF_AWS`/`SAF_AZURE`/`SAF_EKS`
-  families (258 controls; `framework_metadata.json` now 42,678 controls / 310
-  families). CIS Controls OSCAL (proprietary CIS Terms of Use) and the CSA CCM
+  (159), `eks-cis-cluster-baseline` (35), `gcp-cis-benchmark` (60),
+  `gke-cis-benchmark` (25), plus the RHEL 8 (375) / RHEL 9 (452) STIG baselines
+  (ROADMAP R-103), parsed by
+  `sync_frameworks.py::_parse_saf_inspec()` into `SAF_AWS`/`SAF_AZURE`/`SAF_EKS`/
+  `SAF_GCP`/`SAF_GKE`/`SAF_RHEL8`/`SAF_RHEL9` families
+  (`framework_metadata.json` verified at 47,206 controls / 334 families on
+  2026-09-20). CIS Controls OSCAL (proprietary CIS Terms of Use) and the CSA CCM
   bundle (Fair-Use-only, gated zip) were deliberately NOT fetched - kill-switch
   blocks stand. HITRUST CSF has no machine-readable open source and no SCF
   focal-document column (workbook scanned: 0 HITRUST rows of 255) - full text

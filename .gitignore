@@ -13,11 +13,20 @@ nist-csf/
 opengrc/
 oscal-content/
 owasp-top10/
+owasp-api-security/
+owasp-mobile-top10/
+owasp-llm-top10/
+owasp-mcp-top10/
+owasp-k8s-top10/
+owasp-cicd-top10/
+owasp-masvs/
 probo/
 secure-controls-framework/
 security-templates/
 fedramp-rules/
 mitre-saf-cis/
+atlas-data/
+d3fend-ontology/
 
 # generated / ephemeral
 reports/
@@ -64,3 +73,14 @@ scripts/vuln_intel_cache.db
 
 # CSA CCM machine-readable bundle (no-account direct download, CSA (c) all rights reserved - local use only, never commit, never redistribute)
 references/ccm-bundle/
+# MITRE/AI direct-download drop-ins (update_sources.ps1 $directDownloads) -
+# refreshed "latest" files, never committed (same rule as (a) above).
+references/cwe/
+references/capec/
+references/nist-ai-rmf/
+# DOE C2M2 model PDF (update_sources.ps1 $directDownloads, public domain) -
+# refreshed in place, never committed (same rule as (a) above).
+references/c2m2/
+# DISA STIG XCCDF quarterly zips (manual drop-in - versioned, no "latest"
+# URL; never committed, same rule as (a) above).
+references/disa-stig/

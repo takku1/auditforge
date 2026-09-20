@@ -325,4 +325,126 @@ RULES = [
     ),
 ]
 
+EXTRA_RULES = [
+    Rule(
+        id="CICD001", name="Unpinned Third-Party GitHub Action", severity="MEDIUM",
+        controls=("CC8.1",),
+        patterns=_r(
+            r"uses\s*:\s*[A-Za-z0-9_.\-]+/[^\s'\"@]+@(?![0-9a-fA-F]{40}(?![0-9a-fA-F]))[^\s'\"]+",
+        ),
+        extensions=frozenset({".yml", ".yaml"}),
+        remediation="Pin third-party actions to a full commit SHA "
+                    "(e.g. uses: owner/action@<40-char-sha>) instead of a "
+                    "mutable tag or branch; tags/branches can be moved to "
+                    "ship malicious code (supply-chain / CC8.1).",
+    ),
+    Rule(
+        id="CICD002", name="Overly Broad GITHUB_TOKEN Permissions", severity="HIGH",
+        controls=("CC6.1",),
+        patterns=_r(
+            r"(?i)permissions\s*:\s*write-all\b",
+            r"(?i)\bcontents\s*:\s*write\b",
+        ),
+        extensions=frozenset({".yml", ".yaml"}),
+        remediation="Scope GITHUB_TOKEN to the minimum each job needs "
+                    "(default to read-only permissions, escalating single "
+                    "scopes to write only where required); write-all violates "
+                    "least privilege (CC6.1).",
+    ),
+    Rule(
+        id="CICD003", name="Secret Interpolated into CI Run Script", severity="HIGH",
+        controls=("CC6.1",),
+        patterns=_r(
+            r"run\s*:[\s\S]{0,400}?\$\{\{\s*secrets\.[A-Za-z0-9_]+\s*\}\}",
+            r"script\s*:[\s\S]{0,400}?[$][A-Za-z_]*(SECRET|TOKEN|PASSWORD|CREDENTIAL)[A-Za-z_]*",
+            r"sh\s+['\"][^'\"]{0,300}?\$[A-Za-z_]*(SECRET|TOKEN|PASSWORD|CREDENTIAL)[A-Za-z_]*",
+        ),
+        extensions=frozenset({".yml", ".yaml"}),
+        filenames=frozenset({"jenkinsfile"}),
+        remediation="Never interpolate secrets into run:/script:/sh step text "
+                    "(it can leak via logs or a compromised action); map the "
+                    "secret to an env: entry and read it from the environment "
+                    "at runtime (CC6.1).",
+    ),
+    Rule(
+        id="LLM001", name="Untrusted Input in System Prompt / LLM Message", severity="HIGH",
+        controls=("CC8.1",),
+        patterns=_r(
+            r"(?i)(system_prompt|system_message|system_instruction)\s*=\s*f['\"]",
+            r"(?i)(system_prompt|system_message|system_instruction)\s*=\s*[^#\n]*\+",
+            r"messages\s*=\s*\[[^\]]{0,500}?(\+\s*\w+|f['\"])",
+        ),
+        extensions=frozenset(CODE_EXTENSIONS),
+        remediation="Treat this as a direct prompt-injection sink (OWASP LLM "
+                    "Top 10 LLM01:2025 Prompt Injection): never concatenate or "
+                    "interpolate untrusted input into system prompts or LLM "
+                    "message lists - keep instructions constant and pass "
+                    "untrusted data as clearly delimited user-role content "
+                    "with output validation (also see LLM05:2025 Improper "
+                    "Output Handling).",
+    ),
+    Rule(
+        id="LLM002", name="System Prompt Exposure", severity="MEDIUM",
+        controls=("CC6.1",),
+        patterns=_r(
+            r"(?i)\b(return|print|console\.(log|error|warn)|logger?\.(info|debug|warn|error)|jsonify)\b\s*\(?[^()\n]{0,150}?\bsystem_prompt\b",
+            r"(?i)f['\"][^'\"\n]{0,150}?\{\s*system_prompt\s*\}",
+        ),
+        extensions=frozenset(CODE_EXTENSIONS),
+        remediation="Do not return, log, or render system-prompt text to "
+                    "callers (OWASP LLM Top 10 LLM07:2025 System Prompt "
+                    "Leakage); system instructions are confidential (CC6.1).",
+    ),
+    Rule(
+        id="LLM003", name="Unvalidated LLM Tool Output Executed", severity="HIGH",
+        controls=("CC8.1",),
+        patterns=_r(
+            r"(?i)\bos\.(system|popen)\s*\([^()]{0,200}?\b(tool_output|tool_result|function_response|llm_output|model_output|agent_output|generated_code)\b",
+            r"(?i)\bsubprocess\.\w+\s*\([^()]{0,300}?\b(tool_output|tool_result|function_response|llm_output|model_output|agent_output|generated_code)\b",
+            r"(?i)\b(eval|exec)\s*\([^()]{0,200}?\b(tool_output|tool_result|function_response|llm_output|model_output|agent_output|generated_code)\b",
+        ),
+        extensions=frozenset(CODE_EXTENSIONS),
+        remediation="Validate and constrain LLM tool/function-call outputs "
+                    "before acting on them (OWASP LLM Top 10 LLM06:2025 "
+                    "Excessive Agency, LLM05:2025 Improper Output Handling): "
+                    "never pass model-generated text to a shell, subprocess, "
+                    "eval/exec, or privileged operation without allowlist "
+                    "validation and least-privilege execution (CC8.1).",
+    ),
+    Rule(
+        id="K8S001", name="Insecure Kubernetes Pod Security Context", severity="HIGH",
+        controls=("CC6.1", "CC8.1"),
+        patterns=_r(
+            r"(?i)\bprivileged\s*:\s*true\b",
+            r"(?i)\bhost(PID|Network|IPC)\s*:\s*true\b",
+            r"(?i)\ballowPrivilegeEscalation\s*:\s*true\b",
+            r"(?i)\brunAsNonRoot\s*:\s*false\b",
+            r"(?i)\brunAsUser\s*:\s*0\b",
+        ),
+        extensions=frozenset({".yml", ".yaml", ".json"}),
+        remediation="Harden the pod securityContext per the CIS Kubernetes "
+                    "Benchmark: never run privileged or with hostPID/hostNetwork/"
+                    "hostIPC, set allowPrivilegeEscalation to false, and run as "
+                    "a non-root user (runAsNonRoot true, runAsUser above zero); "
+                    "also enforce readOnlyRootFilesystem and a seccompProfile "
+                    "(restricted pod-security-standard) - absence of those "
+                    "fields is not flagged by this presence-based check, so "
+                    "verify them in review (CC6.1/CC8.1).",
+    ),
+    Rule(
+        id="K8S002", name="Wildcard RBAC Verbs/Resources", severity="HIGH",
+        controls=("CC6.1", "CC6.3"),
+        patterns=_r(
+            r"(?i)\bverbs\s*:\s*\[\s*['\"]\*['\"]",
+            r"(?i)\bresources\s*:\s*\[\s*['\"]\*['\"]",
+        ),
+        extensions=frozenset({".yml", ".yaml", ".json"}),
+        remediation="Scope RBAC rules to the minimum verbs/resources required "
+                    "(least privilege, CC6.1/CC6.3); wildcard verbs or resources "
+                    "grant full API control wherever the binding applies.",
+    ),
+]
+
+RULES.extend(EXTRA_RULES)
+
 RULES_BY_ID = {r.id: r for r in RULES}

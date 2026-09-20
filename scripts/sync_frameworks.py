@@ -32,6 +32,20 @@ class FrameworkManager:
         "saf_eks":         {"local_path": "mitre-saf-cis/eks-cis-cluster-baseline/controls"},
         "saf_gcp":         {"local_path": "mitre-saf-cis/gcp-cis-benchmark/controls"},
         "saf_gke":         {"local_path": "mitre-saf-cis/gke-cis-benchmark/controls"},
+        # MITRE SAF DISA STIG InSpec baselines (Apache-2.0, same precedent as
+        # the CIS baselines above): RHEL 8/9 STIG profiles, one SV-*.rb per
+        # STIG, parsed by the same _parse_saf_inspec (SV- file names and
+        # title/desc/impact/tag headers match the CIS shape).
+        "saf_rhel8":       {"local_path": "mitre-saf-cis/rhel8-stig-baseline/controls"},
+        "saf_rhel9":       {"local_path": "mitre-saf-cis/rhel9-stig-baseline/controls"},
+        # DISA STIG XCCDF drop-ins (public.cyber.mil quarterly zips - no
+        # "latest" URL, so manual drop-in like HITRUST precedent, not a
+        # clone; parser activates only when the files are present).
+        "stig_xccdf":      {"local_path": "references/disa-stig", "dropin": True},
+        # DOE C2M2 v2.1 model PDF (US federal work, public domain -
+        # refreshed by update_sources.ps1 $directDownloads, same wiring as
+        # the AI RMF PDF).
+        "c2m2":            {"local_path": "references/c2m2", "dropin": True},
         "ssdf":          {"local_path": "oscal-content/nist.gov/SP800-218/ver1/json/NIST_SP800-218_ver1_catalog.json"},
         "top10_2025":    {"local_path": "owasp-top10/2025/docs/en"},
         "samm":          {"local_path": "references/samm", "dropin": True},
@@ -44,7 +58,80 @@ class FrameworkManager:
         "ref_hitrust":   {"local_path": "references/hitrust-csf", "dropin": True},
         "ref_caiq":      {"local_path": "references/csa-caiq", "dropin": True},
         "ref_aicm":      {"local_path": "references/csa-aicm", "dropin": True},
+        "genai":         {"local_path": "references/nist-ai-600-1/NIST.AI.600-1.pdf", "dropin": True},
+        # OWASP Top-10 family (R-059..R-066): CC-licensed clones kept fresh
+        # by scripts/update_sources.ps1, same precedent as owasp-top10/asvs.
+        # agentic/ shares the llm clone (GenAI Security Project initiative).
+        "api_security":  {"local_path": "owasp-api-security/editions/2023/en"},
+        "mobile":        {"local_path": "owasp-mobile-top10/2023-risks"},
+        "llm":           {"local_path": "owasp-llm-top10/2_0_vulns"},
+        "agentic":       {"local_path": "owasp-llm-top10/initiatives/agent_security_initiative/agentic-top-10/Sprint 1-first-public-draft-expanded"},
+        "mcp":           {"local_path": "owasp-mcp-top10/2025"},
+        "k8s":           {"local_path": "owasp-k8s-top10/2025/en/src"},
+        "cicd":          {"local_path": "owasp-cicd-top10"},
+        "masvs":         {"local_path": "owasp-masvs/controls"},
+        # MITRE/AI expansion (R-067/R-068 + CWE/CAPEC/D3FEND): ATLAS and
+        # D3FEND are permissively licensed git clones (Apache-2.0 /
+        # MIT - LICENSE files verified 2026-09-20) kept fresh by
+        # scripts/update_sources.ps1, same precedent as attack-stix-data.
+        # CWE/CAPEC/AI RMF are direct-download drop-ins under references/
+        # (MITRE "latest" URLs / NIST PDF - refreshed by the
+        # $directDownloads section of update_sources.ps1, no pinned
+        # snapshots); parsers activate only when the files are present.
+        "atlas":         {"local_path": "atlas-data/dist"},
+        "d3fend":        {"local_path": "d3fend-ontology/src/ontology"},
+        "cwe":           {"local_path": "references/cwe", "dropin": True},
+        "capec":         {"local_path": "references/capec", "dropin": True},
+        "ai_rmf":        {"local_path": "references/nist-ai-rmf", "dropin": True},
     }
+
+    # One spec per OWASP Top-10-family list (R-059..R-066), consumed by
+    # sync_all and reused by tests so parser args cannot drift from the
+    # sync wiring. Keys: source_key (SOURCES), prefix (control/family key),
+    # label, filename_re, title_id_re (named groups `id` + `title`), plus
+    # optional year / with_lead (see _parse_owasp_categories).
+    OWASP_CATEGORY_SPECS = (
+        {"source_key": "api_security", "prefix": "API",
+         "label": "OWASP API Security Top 10:2023",
+         "filename_re": re.compile(r"^0xa[0-9a]-(.+)\.md$"),
+         "title_id_re": re.compile(
+             r"(?P<id>API\s*0*\d+\s*:\s*2023)\s+(?P<title>.+)", re.I)},
+        {"source_key": "mobile", "prefix": "MOBILE",
+         "label": "OWASP Mobile Top 10:2024",
+         "filename_re": re.compile(r"^m(\d+)-(.+)\.md$"),
+         "title_id_re": re.compile(r"(?P<id>M\s*0*\d+)\s*:\s*(?P<title>.+)"),
+         "year": "2024"},
+        {"source_key": "llm", "prefix": "LLM",
+         "label": "OWASP LLM Top 10:2025",
+         "filename_re": re.compile(r"^LLM(\d+)_([A-Za-z0-9]+)\.md$"),
+         "title_id_re": re.compile(
+             r"(?P<id>LLM\s*0*\d+\s*:\s*2025)\s+(?P<title>.+)")},
+        {"source_key": "agentic", "prefix": "AGENTIC",
+         "label": "OWASP Top 10 for Agentic Applications 2026",
+         "filename_re": re.compile(r"^ASI(\d+)_.+\.md$"),
+         "title_id_re": re.compile(
+             r"(?P<id>ASI\s*0*\d+)\s*[-\u2013\u2014]\s*(?P<title>.+)"),
+         "year": "2026", "with_lead": False},
+        {"source_key": "mcp", "prefix": "MCP",
+         "label": "OWASP MCP Top 10:2025",
+         "filename_re": re.compile(r"^MCP(\d+)-2025[-\u2013\u2014](.+)\.md$"),
+         "title_id_re": re.compile(
+             r"(?P<id>MCP\s*0*\d+\s*:\s*2025)\s*[-\u2013\u2014]\s*(?P<title>.+)")},
+        {"source_key": "k8s", "prefix": "K8S",
+         "label": "OWASP Kubernetes Top 10:2025",
+         "filename_re": re.compile(r"^(K\d+)-(.+)\.md$"),
+         "title_id_re": re.compile(r"(?P<id>K\s*0*\d+)\s*:\s*(?P<title>.+)"),
+         "year": "2025"},
+        {"source_key": "cicd", "prefix": "CICD",
+         "label": "OWASP Top 10 CI/CD Security Risks",
+         "filename_re": re.compile(r"^(CICD-SEC-\d+)-(.+)\.md$"),
+         "title_id_re": re.compile(
+             r"(?P<id>CICD-SEC-0*\d+)\s*:\s*(?P<title>.+)")},
+        {"source_key": "masvs", "prefix": "MASVS",
+         "label": "OWASP Mobile Application Security Verification Standard (MASVS)",
+         "filename_re": re.compile(r"^(MASVS-[A-Z]+-\d+)\.md$"),
+         "title_id_re": re.compile(r"(?P<id>MASVS-[A-Z]+-\d+)\s*(?P<title>.*)")},
+    )
 
     # Friendlier labels for the ComplianceAsCode control files that map to a
     # single, well-known named standard (rather than a per-product benchmark
@@ -95,6 +182,12 @@ class FrameworkManager:
         self._parse_saf_inspec("saf_eks", "SAF_EKS", "MITRE SAF CIS EKS Benchmark (InSpec)")
         self._parse_saf_inspec("saf_gcp", "SAF_GCP", "MITRE SAF CIS GCP Benchmark (InSpec)")
         self._parse_saf_inspec("saf_gke", "SAF_GKE", "MITRE SAF CIS GKE Benchmark (InSpec)")
+        self._parse_saf_inspec("saf_rhel8", "SAF_RHEL8", "MITRE SAF RHEL 8 STIG Baseline (InSpec)")
+        self._parse_saf_inspec("saf_rhel9", "SAF_RHEL9", "MITRE SAF RHEL 9 STIG Baseline (InSpec)")
+        # DISA STIG XCCDF + DOE C2M2 - each a no-op when its drop-in is
+        # absent (see _parse_stig_xccdf / _parse_c2m2).
+        self._parse_stig_xccdf()
+        self._parse_c2m2()
         # OWASP Top 10 OSIB export is a deeply nested CWE-linkage graph, not a
         # flat control list; the indexed Top 10:2025 categories come from the
         # 2025/docs/en markdown in the same clone (see _parse_top10_2025).
@@ -116,6 +209,18 @@ class FrameworkManager:
             "bsimm", "BSIMM", "BSIMM Software Security Framework",
             re.compile(r"(?P<title>.+?)\s+\((?P<id>[A-Za-z]{1,4})\)\s*$"))
         self._parse_reference_csv("cisa_cpg", "CPG", "CISA Cybersecurity Performance Goals 2.0")
+        self._parse_genai()
+        # OWASP Top-10 family (R-059..R-066) - one spec per list, each a
+        # no-op when its clone is absent.
+        for spec in self.OWASP_CATEGORY_SPECS:
+            self._parse_owasp_categories(**spec)
+        # MITRE/AI expansion (R-067/R-068 + CWE/CAPEC/D3FEND) - each a
+        # no-op when its clone/drop-in is absent.
+        self._parse_atlas()
+        self._parse_d3fend()
+        self._parse_cwe()
+        self._parse_capec()
+        self._parse_ai_rmf()
         # Gated frameworks (licenses forbid automated fetching - registration,
         # Fair-Use-only, or subscription gates; user-supplied files only).
         self._parse_reference_csv("ref_cis", "CIS", "CIS Critical Security Controls v8.1")
@@ -627,6 +732,74 @@ class FrameworkManager:
             self.metadata["frameworks"][prefix] = label
         print(f"[i] {source_key}: {n} InSpec controls indexed")
 
+    def _iter_genai_actions(self, text):
+        """Yields (action_id, title) per MS-/MG- action in NIST AI 600-1
+        extracted text. The ID opens a line; the title is the same-line
+        remainder plus following non-blank, non-ID lines (the PDF also
+        emits risk-category tags on their own lines, which ride along as
+        associated concepts).
+        """
+        id_re = re.compile(r"^(MS|MG)-\d+\.\d+-\d+\b")
+        cur_id, buf = None, []
+
+        def flush():
+            if cur_id and buf:
+                title = re.sub(r"\s+", " ", " ".join(buf)).strip()
+                if title:
+                    return cur_id, title[:2000]
+            return None
+
+        for line in text.splitlines():
+            s = line.strip()
+            m = id_re.match(s)
+            if m:
+                prev = flush()
+                if prev:
+                    yield prev
+                cur_id = m.group(0)
+                rest = s[m.end():].strip()
+                buf = [rest] if rest else []
+            elif s and cur_id is not None:
+                buf.append(s)
+        prev = flush()
+        if prev:
+            yield prev
+
+    def _parse_genai_from_text(self, text):
+        n = 0
+        for cid, title in self._iter_genai_actions(text):
+            key = f"GENAI:{cid.upper()}"
+            if key not in self.metadata["controls"]:
+                self.metadata["controls"][key] = title
+                n += 1
+        if n:
+            self.metadata["frameworks"]["GENAI"] = (
+                "NIST AI 600-1 Generative AI Profile")
+        return n
+
+    def _parse_genai(self):
+        """Indexes NIST AI 600-1 GenAI Profile actions (MS-/MG- IDs) from
+        the locally fetched public-domain PDF (US federal work). pypdf is
+        imported lazily so a missing dependency degrades to a no-op, not
+        a crash; likewise a missing/unreadable file. No-op when absent.
+        """
+        path = Path(self.SOURCES["genai"]["local_path"])
+        if not path.is_file():
+            return
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            print("[i] genai: pypdf unavailable - skipping")
+            return
+        try:
+            reader = PdfReader(str(path))
+            text = "\n".join((p.extract_text() or "") for p in reader.pages)
+        except Exception as e:
+            print(f"[i] genai: unreadable PDF ({e}) - skipping")
+            return
+        n = self._parse_genai_from_text(text)
+        print(f"[i] genai: {n} actions indexed")
+
     # -- Coverage expansion: SSDF, OWASP Top 10:2025, references/ drop-ins ---
 
     def _parse_ssdf(self):
@@ -716,6 +889,719 @@ class FrameworkManager:
         if n:
             self.metadata["frameworks"]["top10"] = "OWASP Top 10:2025"
         print(f"[i] top10_2025: {n} categories indexed")
+
+    @staticmethod
+    def _owasp_doc_title_and_lead(lines):
+        """Split OWASP category markdown into (title, lead paragraph).
+
+        Title prefers the `title:` frontmatter field (Mobile/MCP/K8s/CI-CD
+        carry it; their first `#` heading is a section like `# Threat
+        Agents`), else the first `#`/`##` heading. Lead is the first
+        plain-text paragraph under any later heading, skipping tables,
+        markup, and bold label-only lines (e.g. Agentic's `**Description:**`
+        or Mobile's `**Application Specific**`).
+        """
+        title, title_idx = "", -1
+        title_from_heading = False
+        if lines and lines[0].strip() == "---":
+            for i in range(1, min(len(lines), 30)):
+                s = lines[i].strip()
+                if s in ("---", "..."):
+                    break
+                m = re.match(r"title\s*:\s*[\"']?(?P<t>.+?)[\"']?\s*$", s)
+                if m:
+                    title, title_idx = m.group("t").strip(), i
+                    break
+        if not title:
+            for i, line in enumerate(lines):
+                s = line.strip()
+                if s.startswith("#"):
+                    title, title_idx = s.lstrip("#").strip(), i
+                    title_from_heading = True
+                    break
+        title = re.sub(r"\*+", "", title).strip()
+        lead = ""
+        # Content following a title-heading belongs to that heading (LLM /
+        # Agentic / MASVS / API titles are their own section); frontmatter
+        # titles need the first later heading to open a section.
+        in_section = title_from_heading
+        for line in lines[title_idx + 1:]:
+            s = line.strip()
+            if not s:
+                continue
+            if s.startswith("#"):
+                in_section = True
+                continue
+            if not in_section:
+                continue
+            if s.startswith(("<", "|", "!", "[", "{:", "```")):
+                continue
+            if re.fullmatch(r"\*{1,2}[^*]+\*{1,2}:?", s) and len(s) < 80:
+                continue
+            lead = re.sub(r"\s+", " ", s)[:600]
+            break
+        return title, lead
+
+    def _parse_owasp_categories(self, source_key, prefix, label,
+                                filename_re, title_id_re, year="",
+                                with_lead=True):
+        """Generic OWASP Top-10-family indexer (R-059..R-066), generalizing
+        the _parse_top10_2025 markdown pattern: one markdown file per
+        category, control ID + title from the doc title, first section
+        paragraph as context. Files whose title carries no ID (prefaces,
+        indexes, templates) are skipped. No-op when the clone is absent.
+        `year` is appended to bare IDs (M1 -> M1:2024) only when the ID
+        does not already carry it; pass "" when the list has no year.
+        `with_lead` is False when the upstream bodies are still template
+        placeholders (Agentic draft) - titles index, filler prose does not.
+        """
+        base = Path(self.SOURCES[source_key]["local_path"])
+        if not base.is_dir():
+            return
+        n = 0
+        for filename in sorted(os.listdir(base)):
+            if not filename_re.match(filename):
+                continue
+            lines = Path(os.path.join(str(base), filename)).read_text(
+                encoding="utf-8", errors="ignore").splitlines()
+            title, lead = self._owasp_doc_title_and_lead(lines)
+            if not with_lead:
+                lead = ""
+            if not title:
+                continue
+            m = title_id_re.search(title)
+            if not m:
+                continue
+            cid = re.sub(r"\s+", "", m.group("id")).upper()
+            try:
+                t = m.group("title").strip()
+            except IndexError:
+                t = ""
+            t = re.sub(r"\s+", " ", re.sub(r"\*+", "", t)).strip()
+            if not cid:
+                continue
+            disp = cid if (not year or year in cid) else f"{cid}:{year}"
+            if t:
+                text = f"{disp} {t}"
+            else:
+                text = disp
+            if lead and lead not in text:
+                text += f" - {lead}"
+            key = f"{prefix}:{disp}"
+            if key not in self.metadata["controls"]:
+                self.metadata["controls"][key] = text[:2000]
+                n += 1
+        if n:
+            self.metadata["frameworks"][prefix] = label
+        print(f"[i] {source_key}: {n} categories indexed")
+
+    def _store_atlas(self, cid, name, desc):
+        cid = re.sub(r"\s+", "", str(cid or "")).upper()
+        name = re.sub(r"\s+", " ", str(name or "").strip())
+        desc = re.sub(r"\s+", " ", str(desc or "").strip())
+        if not cid or not name:
+            return False
+        text = f"{name} - {desc[:600]}" if desc and desc != name else name
+        key = f"ATLAS:{cid}"
+        if key not in self.metadata["controls"]:
+            self.metadata["controls"][key] = text[:2000]
+            return True
+        return False
+
+    def _parse_atlas(self):
+        """Indexes MITRE ATLAS (Adversarial Threat Landscape for AI Systems)
+        techniques from the Apache-2.0 atlas-data clone
+        (github.com/mitre-atlas/atlas-data - auto-cloned by
+        scripts/update_sources.ps1, same precedent as attack-stix-data).
+        Unlike ATT&CK's STIX JSON (see _parse_attack), ATLAS ships YAML:
+        dist/v6/ATLAS-<date>.yaml (newest dated file wins; the unversioned
+        ATLAS-latest.yaml is a one-line pointer, not data) with `techniques`
+        / `tactics` mappings of AML.Txxxx[.xxx] / AML.TAxxxx entries, plus a
+        fallback for the legacy dist/ATLAS.yaml v5 shape (`matrices` list).
+        Technique IDs are ATLAS-namespaced (AML.*), so one ATLAS family
+        covers tactics and techniques alike. No-op when the clone is absent.
+        """
+        base = Path(self.SOURCES["atlas"]["local_path"])
+        if not base.is_dir():
+            return
+        path = None
+        v6 = base / "v6"
+        if v6.is_dir():
+            dated = sorted(p for p in v6.glob("ATLAS-*.yaml")
+                           if p.name != "ATLAS-latest.yaml")
+            if dated:
+                path = dated[-1]
+        if path is None:
+            legacy = base / "ATLAS.yaml"
+            if not legacy.is_file():
+                return
+            path = legacy
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (yaml.YAMLError, OSError):
+            return
+        if not isinstance(data, dict):
+            return
+        n = 0
+        techniques = data.get("techniques")
+        tactics = data.get("tactics")
+        if isinstance(techniques, dict):
+            for cid, entry in techniques.items():
+                if isinstance(entry, dict):
+                    n += self._store_atlas(cid, entry.get("name"),
+                                           entry.get("description"))
+                elif entry:
+                    n += self._store_atlas(cid, entry, "")
+        if isinstance(tactics, dict):
+            for cid, entry in tactics.items():
+                if isinstance(entry, dict):
+                    n += self._store_atlas(cid, entry.get("name"),
+                                           entry.get("description"))
+                elif entry:
+                    n += self._store_atlas(cid, entry, "")
+        for matrix in data.get("matrices", []) or []:
+            if not isinstance(matrix, dict):
+                continue
+            for group_key in ("tactics", "techniques"):
+                group = matrix.get(group_key)
+                if isinstance(group, dict):
+                    items = group.values()
+                elif isinstance(group, list):
+                    items = group
+                else:
+                    continue
+                for entry in items:
+                    if not isinstance(entry, dict):
+                        continue
+                    n += self._store_atlas(entry.get("id"), entry.get("name"),
+                                           entry.get("description"))
+        if n:
+            self.metadata["frameworks"]["ATLAS"] = (
+                "MITRE ATLAS (Adversarial Threat Landscape for AI Systems)")
+        print(f"[i] atlas: {n} techniques indexed")
+
+    def _parse_d3fend(self):
+        """Indexes MITRE D3FEND defensive techniques from the MIT-licensed
+        d3fend-ontology clone (github.com/d3fend/d3fend-ontology -
+        auto-cloned by scripts/update_sources.ps1). The distribution
+        artifact is src/ontology/d3fend-protege.ttl (Turtle); it is parsed
+        with a stdlib regex over subject blocks (`:d3fend-id "D3-XXX"` plus
+        the block's rdfs:label and :definition) so no rdflib dependency is
+        needed. Each D3-XXX becomes one D3FEND:* entry. No-op when absent.
+        """
+        base = Path(self.SOURCES["d3fend"]["local_path"])
+        ttl = base / "d3fend-protege.ttl"
+        if not ttl.is_file():
+            candidates = sorted(base.glob("*.ttl"))
+            if not candidates:
+                return
+            ttl = candidates[-1]
+        try:
+            text = ttl.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return
+        n = 0
+        for block in re.split(r"\n(?=:)", text):
+            m_id = re.search(r':d3fend-id\s+"(D3-[A-Za-z]+)"', block)
+            if not m_id:
+                continue
+            m_lab = re.search(r'rdfs:label\s+"((?:[^"\\]|\\.)*)"', block)
+            if not m_lab:
+                continue
+            label = re.sub(r"\s+", " ",
+                           m_lab.group(1).replace('\\"', '"')
+                           .replace("\\\\", "\\")).strip()
+            m_def = re.search(r':definition\s+"((?:[^"\\]|\\.)*)"', block)
+            desc = ""
+            if m_def:
+                desc = re.sub(
+                    r"\s+", " ",
+                    m_def.group(1).replace('\\"', '"')
+                    .replace("\\\\", "\\")).strip()
+            if not label:
+                continue
+            entry = f"{label} - {desc[:600]}" if desc and desc != label else label
+            key = f"D3FEND:{m_id.group(1).upper()}"
+            if key not in self.metadata["controls"]:
+                self.metadata["controls"][key] = entry[:2000]
+                n += 1
+        if n:
+            self.metadata["frameworks"]["D3FEND"] = (
+                "MITRE D3FEND Cyber Countermeasures")
+        print(f"[i] d3fend: {n} techniques indexed")
+
+    @staticmethod
+    def _xml_local(tag):
+        return tag.rsplit("}", 1)[-1] if "}" in tag else tag.rsplit(":", 1)[-1]
+
+    def _parse_cwe(self):
+        """Indexes MITRE CWE weaknesses from references/cwe/ (a
+        cwec_v*.xml drop-in, or the .zip that ships it, fetched from
+        https://cwe.mitre.org/data/xml/cwec_latest.xml.zip - MITRE free
+        download, no registration; refreshed by update_sources.ps1). Element
+        names are matched namespace-tolerantly (local name only) so schema
+        version drift (cwe-6/cwe-7/...) cannot break the parse. Each
+        <Weakness ID Name> plus its <Description> becomes one CWE:CWE-<id>
+        entry. No-op when the drop-in is absent.
+        """
+        import xml.etree.ElementTree as ET
+        import zipfile
+        base = Path(self.SOURCES["cwe"]["local_path"])
+        if not base.is_dir():
+            return
+        xml_text = None
+        for path in sorted(base.glob("*.xml")):
+            try:
+                xml_text = path.read_text(encoding="utf-8", errors="ignore")
+                break
+            except OSError:
+                continue
+        if xml_text is None:
+            for path in sorted(base.glob("*.zip")):
+                try:
+                    with zipfile.ZipFile(str(path)) as zf:
+                        inner = next((n for n in zf.namelist()
+                                      if n.lower().endswith(".xml")), None)
+                        if inner is None:
+                            continue
+                        xml_text = zf.read(inner).decode("utf-8", "ignore")
+                        break
+                except (zipfile.BadZipFile, OSError, KeyError):
+                    continue
+        if not xml_text:
+            return
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError:
+            return
+        n = 0
+        for el in root.iter():
+            if self._xml_local(el.tag) != "Weakness":
+                continue
+            cid = str(el.get("ID") or "").strip()
+            name = re.sub(r"\s+", " ", str(el.get("Name") or "").strip())
+            if not cid or not name:
+                continue
+            desc = ""
+            for child in el:
+                if self._xml_local(child.tag) == "Description":
+                    desc = re.sub(r"\s+", " ",
+                                  "".join(child.itertext())).strip()
+                    break
+            entry = f"{name} - {desc[:600]}" if desc and desc != name else name
+            key = f"CWE:CWE-{cid}"
+            if key not in self.metadata["controls"]:
+                self.metadata["controls"][key] = entry[:2000]
+                n += 1
+        if n:
+            self.metadata["frameworks"]["CWE"] = "MITRE Common Weakness Enumeration"
+        print(f"[i] cwe: {n} weaknesses indexed")
+
+    def _parse_capec(self):
+        """Indexes MITRE CAPEC attack patterns from references/capec/ (a
+        capec_latest.xml drop-in, or a views/*.xml(.zip) export, fetched from
+        https://capec.mitre.org/data/xml/capec_latest.xml - MITRE free
+        download, no registration; refreshed by update_sources.ps1).
+        Namespace-tolerant like _parse_cwe. Each <Attack_Pattern ID Name>
+        plus its <Description> becomes one CAPEC:CAPEC-<id> entry. No-op
+        when the drop-in is absent.
+        """
+        import xml.etree.ElementTree as ET
+        import zipfile
+        base = Path(self.SOURCES["capec"]["local_path"])
+        if not base.is_dir():
+            return
+        candidates = sorted(base.glob("*.xml")) + sorted(base.glob("*.zip"))
+        if not candidates:
+            return
+        n = 0
+        seen_files = 0
+        for path in candidates:
+            try:
+                if path.suffix.lower() == ".zip":
+                    with zipfile.ZipFile(str(path)) as zf:
+                        inner = next((n_ for n_ in zf.namelist()
+                                      if n_.lower().endswith(".xml")), None)
+                        if inner is None:
+                            continue
+                        xml_text = zf.read(inner).decode("utf-8", "ignore")
+                else:
+                    xml_text = path.read_text(encoding="utf-8", errors="ignore")
+            except (zipfile.BadZipFile, OSError, KeyError):
+                continue
+            try:
+                root = ET.fromstring(xml_text)
+            except ET.ParseError:
+                continue
+            seen_files += 1
+            for el in root.iter():
+                if self._xml_local(el.tag) != "Attack_Pattern":
+                    continue
+                cid = str(el.get("ID") or "").strip()
+                name = re.sub(r"\s+", " ", str(el.get("Name") or "").strip())
+                if not cid or not name:
+                    continue
+                desc = ""
+                for child in el:
+                    if self._xml_local(child.tag) == "Description":
+                        desc = re.sub(r"\s+", " ",
+                                      "".join(child.itertext())).strip()
+                        break
+                entry = (f"{name} - {desc[:600]}"
+                         if desc and desc != name else name)
+                key = f"CAPEC:CAPEC-{cid}"
+                if key not in self.metadata["controls"]:
+                    self.metadata["controls"][key] = entry[:2000]
+                    n += 1
+        if n:
+            self.metadata["frameworks"]["CAPEC"] = (
+                "MITRE Common Attack Pattern Enumeration and Classification")
+        if seen_files:
+            print(f"[i] capec: {n} patterns indexed")
+
+    def _iter_ai_rmf_subcategories(self, text):
+        """Yields (subcategory_id, title) per GOVERN/MAP/MEASURE/MANAGE
+        major.minor entry in NIST AI RMF 1.0 extracted text (same shape as
+        _iter_genai_actions: the ID opens a line, the title is the same-line
+        remainder plus following non-blank lines). PDF line-wrap hyphens
+        ("inte- grated") are joined; category headers ("GOVERN 1:", no
+        minor) and Table/Figure/Section lines end the current entry.
+        """
+        id_re = re.compile(r"^(GOVERN|MAP|MEASURE|MANAGE)\s+(\d+)\.(\d+)\s*:")
+        stop_re = re.compile(
+            r"^(GOVERN|MAP|MEASURE|MANAGE)\s+\d+\s*:|^(Table|Figure|Section)\b")
+        cur_id, buf = None, []
+
+        def flush():
+            if cur_id and buf:
+                title = re.sub(r"(\w)-\s+(\w)", r"\1\2", " ".join(buf))
+                title = re.sub(r"\s+", " ", title).strip()
+                if title:
+                    return cur_id, title[:2000]
+            return None
+
+        for line in text.splitlines():
+            s = line.strip()
+            m = id_re.match(s)
+            if m:
+                prev = flush()
+                if prev:
+                    yield prev
+                cur_id = f"{m.group(1)}-{m.group(2)}.{m.group(3)}"
+                rest = s[m.end():].strip()
+                buf = [rest] if rest else []
+            elif s and cur_id is not None:
+                if stop_re.match(s):
+                    prev = flush()
+                    if prev:
+                        yield prev
+                    cur_id, buf = None, []
+                else:
+                    buf.append(s)
+        prev = flush()
+        if prev:
+            yield prev
+
+    def _parse_ai_rmf_from_text(self, text):
+        n = 0
+        for cid, title in self._iter_ai_rmf_subcategories(text):
+            key = f"AIRMF:{cid.upper()}"
+            if key not in self.metadata["controls"]:
+                self.metadata["controls"][key] = title
+                n += 1
+        if n:
+            self.metadata["frameworks"]["AIRMF"] = (
+                "NIST AI Risk Management Framework 1.0")
+        return n
+
+    def _parse_ai_rmf(self):
+        """Indexes NIST AI RMF 1.0 Govern/Map/Measure/Manage subcategories
+        from the locally fetched public-domain PDF
+        (references/nist-ai-rmf/NIST.AI.100-1.pdf, US federal work -
+        refreshed by update_sources.ps1). Same lazy-pypdf wiring as
+        _parse_genai: a missing dependency or file degrades to a no-op.
+        """
+        path = Path(self.SOURCES["ai_rmf"]["local_path"]) / "NIST.AI.100-1.pdf"
+        if not path.is_file():
+            pdfs = sorted(Path(self.SOURCES["ai_rmf"]["local_path"]).glob("*.pdf")) \
+                if Path(self.SOURCES["ai_rmf"]["local_path"]).is_dir() else []
+            if not pdfs:
+                return
+            path = pdfs[0]
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            print("[i] ai_rmf: pypdf unavailable - skipping")
+            return
+        try:
+            reader = PdfReader(str(path))
+            text = "\n".join((p.extract_text() or "") for p in reader.pages)
+        except Exception as e:
+            print(f"[i] ai_rmf: unreadable PDF ({e}) - skipping")
+            return
+        n = self._parse_ai_rmf_from_text(text)
+        print(f"[i] ai_rmf: {n} subcategories indexed")
+
+    @staticmethod
+    def _stig_bench_tag(root, filename):
+        """Short benchmark tag for STIG entry keys (V-IDs repeat across
+        STIGs, so the key is namespaced STIG:<BENCH>:<V-ID>). Prefers the
+        XCCDF <Benchmark> title/id, else the file stem; drops the leading
+        DISA "U_", quarterly version tokens (V2R1), and packaging words
+        (Manual/XCCDF/STIG) so a new quarterly release keeps stable keys.
+        """
+        title = ""
+        for el in root.iter():
+            if FrameworkManager._xml_local(el.tag) == "Benchmark":
+                for child in el:
+                    if FrameworkManager._xml_local(child.tag) == "title" \
+                            and (child.text or "").strip():
+                        title = child.text.strip()
+                        break
+                if not title:
+                    title = str(el.get("id") or "")
+                break
+        raw = title or re.sub(r"\.zip$", "", filename, flags=re.I)
+        toks = [t for t in re.split(r"[^A-Za-z0-9]+", raw.upper()) if t]
+        drop = {"U", "MANUAL", "XCCDF", "XML", "STIG"}
+        toks = [t for t in toks
+                if t not in drop and not re.fullmatch(r"V\d+R\d+", t)]
+        return "-".join(toks[:4])[:24] or "STIG"
+
+    def _parse_stig_xccdf_text(self, xml_text, filename):
+        import xml.etree.ElementTree as ET
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError:
+            return 0
+        bench = self._stig_bench_tag(root, filename)
+        n = 0
+        for group in root.iter():
+            if self._xml_local(group.tag) != "Group":
+                continue
+            vid = str(group.get("id") or "").strip().upper()
+            if not re.fullmatch(r"V-\d+", vid):
+                continue
+            title, rule_desc, rule_id, severity = "", "", "", ""
+            for child in group:
+                local = self._xml_local(child.tag)
+                if local == "title" and not title:
+                    title = re.sub(r"\s+", " ",
+                                   "".join(child.itertext())).strip()
+                elif local == "Rule" and not rule_desc:
+                    rule_id = str(child.get("id") or "").strip().upper()
+                    severity = str(child.get("severity") or "").strip()
+                    for sub in child:
+                        if self._xml_local(sub.tag) == "description":
+                            rule_desc = re.sub(
+                                r"\s+", " ",
+                                "".join(sub.itertext())).strip()
+                            break
+            if not title:
+                continue
+            entry = title
+            if rule_desc and rule_desc != title:
+                entry += f" - {rule_desc[:600]}"
+            meta = []
+            if rule_id:
+                meta.append(f"STIG ID {rule_id}")
+            if severity:
+                meta.append(f"severity {severity}")
+            if meta:
+                entry += " (" + "; ".join(meta) + ")"
+            key = f"STIG:{bench}:{vid}"
+            if key not in self.metadata["controls"]:
+                self.metadata["controls"][key] = entry[:2000]
+                n += 1
+        return n
+
+    def _parse_stig_xccdf(self):
+        """Indexes DISA STIG requirements from references/disa-stig/ (the
+        quarterly *-Manual-xccdf.xml files inside the public.cyber.mil
+        STIG zips - free download, no registration, but versioned quarterly
+        with no "latest" URL, so a manual drop-in rather than a
+        $directDownloads fetch; see references/README.md). Namespace-
+        tolerant like _parse_cwe (XCCDF 1.1/1.2). Each <Group id="V-...">
+        plus its <Rule> description becomes one STIG:<BENCH>:<V-ID> entry
+        (V-IDs repeat across STIGs, hence the benchmark namespace). The
+        MITRE SAF STIG InSpec baselines (SAF_RHEL8/SAF_RHEL9) carry the
+        same requirements as executable checks; this parser covers STIGs
+        with no SAF profile. No-op when the drop-in is absent.
+        """
+        import zipfile
+        base = Path(self.SOURCES["stig_xccdf"]["local_path"])
+        if not base.is_dir():
+            return
+        candidates = sorted(base.glob("*.xml")) + sorted(base.glob("*.zip"))
+        if not candidates:
+            return
+        n = seen = 0
+        for path in candidates:
+            try:
+                if path.suffix.lower() == ".zip":
+                    with zipfile.ZipFile(str(path)) as zf:
+                        inners = [x for x in zf.namelist()
+                                  if x.lower().endswith((".xml", "-xccdf"))]
+                        if not inners:
+                            continue
+                        for inner in sorted(inners):
+                            try:
+                                xml_text = zf.read(inner).decode(
+                                    "utf-8", "ignore")
+                            except KeyError:
+                                continue
+                            seen += 1
+                            n += self._parse_stig_xccdf_text(
+                                xml_text, f"{path.name}/{inner}")
+                else:
+                    xml_text = path.read_text(encoding="utf-8",
+                                              errors="ignore")
+                    seen += 1
+                    n += self._parse_stig_xccdf_text(xml_text, path.name)
+            except (zipfile.BadZipFile, OSError):
+                continue
+        if n:
+            self.metadata["frameworks"]["STIG"] = (
+                "DISA Security Technical Implementation Guides (XCCDF)")
+        if seen:
+            print(f"[i] stig_xccdf: {n} requirements indexed")
+
+    def _iter_c2m2_practices(self, text):
+        """Yields (practice_id, objective_title, mil, practice_text) per
+        DOE C2M2 v2.1 practice. IDs follow the model notation
+        DOMAIN-objective+letter (e.g. ASSET-1a, Figure 5): the domain comes
+        from the `6.N Name (SHORT)` heading (SHORT wraps onto the next
+        line), the objective from `N. Title` lines, and each practice from
+        `MIL1|2|3 <letter>.` lines with wrapped continuation lines. Page
+        headers, page numbers, and Figure/Table lines terminate the current
+        practice; TOC dotted-leader lines never open headings.
+        """
+        domain_re = re.compile(r"^6\.\d+\s+(?P<rest>.*)$")
+        short_re = re.compile(r"\((?P<short>[A-Z][A-Z0-9-]*)\)\s*$")
+        obj_re = re.compile(r"^(?P<num>\d{1,2})\.\s+(?P<title>[A-Z].+)$")
+        mil_re = re.compile(r"^MIL(?P<mil>[123])\s+(?:(?P<letter>[a-z])\.\s*(?P<rest>.*)|(?P<none>No practice.*))$")
+        cont_re = re.compile(r"^(?P<letter>[a-z])\.\s+(?P<rest>.*)$")
+        skip_re = re.compile(
+            r"^(Cybersecurity Capability Maturity Model|Figure|Table)\b|^\d+\s*$")
+        domain, objnum, objtitle = None, None, ""
+        pending_domain, cur_mil, cur_letter, buf = False, None, None, []
+
+        def flush():
+            if domain and objnum and cur_letter and buf:
+                practice = re.sub(r"\s+", " ", " ".join(buf)).strip()
+                if practice:
+                    return (f"{domain}-{objnum}{cur_letter}", domain,
+                            objtitle, cur_mil, practice[:2000])
+            return None
+
+        for line in text.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            if ".." not in s:
+                m = domain_re.match(s)
+                if m:
+                    prev = flush()
+                    if prev:
+                        yield prev
+                    cur_mil, cur_letter, buf = None, None, []
+                    objnum, objtitle = None, ""
+                    rest = m.group("rest")
+                    sm = re.search(r"\(([A-Z][A-Z0-9-]*)\)\s*$", rest)
+                    if sm:
+                        domain, pending_domain = sm.group(1), False
+                    else:
+                        pending_domain = True
+                    continue
+            if pending_domain:
+                sm = short_re.search(s)
+                if sm:
+                    domain = sm.group(1)
+                    pending_domain = False
+                    continue
+            if skip_re.match(s) or (s.isupper() and len(s) < 80):
+                prev = flush()
+                if prev:
+                    yield prev
+                cur_mil, cur_letter, buf = None, None, []
+                continue
+            m = mil_re.match(s)
+            if m and domain and objnum:
+                prev = flush()
+                if prev:
+                    yield prev
+                if m.group("none"):
+                    cur_mil, cur_letter, buf = None, None, []
+                else:
+                    cur_mil, cur_letter = m.group("mil"), m.group("letter")
+                    buf = [m.group("rest")] if m.group("rest") else []
+                continue
+            m = cont_re.match(s)
+            if m and domain and objnum and cur_mil:
+                prev = flush()
+                if prev:
+                    yield prev
+                cur_letter = m.group("letter")
+                buf = [m.group("rest")] if m.group("rest") else []
+                continue
+            m = obj_re.match(s)
+            if m and domain and ".." not in s:
+                prev = flush()
+                if prev:
+                    yield prev
+                objnum, objtitle = m.group("num"), m.group("title").strip()
+                cur_mil, cur_letter, buf = None, None, []
+                continue
+            if cur_letter is not None:
+                buf.append(s)
+        prev = flush()
+        if prev:
+            yield prev
+
+    def _parse_c2m2_from_text(self, text):
+        n = 0
+        for pid, dom, objtitle, mil, practice in self._iter_c2m2_practices(
+                text):
+            key = f"C2M2:{pid.upper()}"
+            if key not in self.metadata["controls"]:
+                self.metadata["controls"][key] = (
+                    f"{practice} ({dom} objective "
+                    f"{objtitle}, MIL{mil})")[:2000]
+                n += 1
+        if n:
+            self.metadata["frameworks"]["C2M2"] = (
+                "DOE Cybersecurity Capability Maturity Model v2.1")
+        return n
+
+    def _parse_c2m2(self):
+        """Indexes DOE C2M2 v2.1 domain practices (DOMAIN-objective+letter,
+        e.g. ASSET-1a) from the public-domain model PDF
+        (references/c2m2/, US federal work - refreshed by
+        update_sources.ps1 $directDownloads). Same lazy-pypdf wiring as
+        _parse_genai/_parse_ai_rmf: a missing dependency or file degrades
+        to a no-op. SCF crosswalk rows already map C2M2 clauses; this adds
+        the native practice text.
+        """
+        base = Path(self.SOURCES["c2m2"]["local_path"])
+        if not base.is_dir():
+            return
+        cands = sorted(base.glob("C2M2*.pdf")) + sorted(base.glob("*.pdf"))
+        if not cands:
+            return
+        path = cands[0]
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            print("[i] c2m2: pypdf unavailable - skipping")
+            return
+        try:
+            reader = PdfReader(str(path))
+            text = "\n".join((p.extract_text() or "") for p in reader.pages)
+        except Exception as e:
+            print(f"[i] c2m2: unreadable PDF ({e}) - skipping")
+            return
+        n = self._parse_c2m2_from_text(text)
+        print(f"[i] c2m2: {n} practices indexed")
 
     def _walk_named_descriptions(self, node, prefix):
         """Recursive name+description indexer over a decoded YAML/JSON doc;

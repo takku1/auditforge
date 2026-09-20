@@ -398,5 +398,130 @@ class TestHistoryScan(AuditFixture):
         self.assertEqual(report["summary"]["total"], 0)
 
 
+class TestCICDRules(AuditFixture):
+    def test_unpinned_action_flagged(self):
+        self.write(".github/workflows/ci.yml",
+                   "jobs:\n  build:\n    steps:\n      - uses: actions/checkout@v4\n")
+        self.assertIn("CICD001", self.rule_ids(self.audit()))
+
+    def test_sha_pinned_action_passes(self):
+        self.write(".github/workflows/ci.yml",
+                   "jobs:\n  build:\n    steps:\n"
+                   "      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\n")
+        self.assertNotIn("CICD001", self.rule_ids(self.audit()))
+
+    def test_broad_token_permissions_flagged(self):
+        self.write(".github/workflows/deploy.yml",
+                   "permissions: write-all\njobs:\n  d:\n    steps:\n      - run: make deploy\n")
+        self.write(".github/workflows/other.yml", "jobs:\n  b:\n    permissions:\n      contents: write\n")
+        report = self.audit()
+        cicd002 = [f for f in report["findings"] if f.rule.id == "CICD002"]
+        self.assertEqual(len(cicd002), 2)
+        self.assertTrue(all(f.severity == "HIGH" for f in cicd002))
+
+    def test_read_only_token_permissions_pass(self):
+        self.write(".github/workflows/ci.yml",
+                   "permissions: read-all\njobs:\n  b:\n    steps:\n      - run: make test\n")
+        self.assertNotIn("CICD002", self.rule_ids(self.audit()))
+
+    def test_secret_in_run_script_flagged(self):
+        self.write(".github/workflows/deploy.yml",
+                   "jobs:\n  d:\n    steps:\n      - run: echo ${{ secrets.DEPLOY_TOKEN }}\n")
+        report = self.audit()
+        self.assertIn("CICD003", self.rule_ids(report))
+        finding = [f for f in report["findings"] if f.rule.id == "CICD003"][0]
+        self.assertIn("CC6.1", finding.rule.controls)
+
+    def test_gitlab_script_secret_and_jenkins_sh_flagged(self):
+        self.write(".gitlab-ci.yml",
+                   "deploy:\n  script:\n    - echo $DEPLOY_TOKEN\n")
+        self.write("Jenkinsfile", "pipeline {\n  steps {\n    sh 'curl -H $API_TOKEN $URL'\n  }\n}\n")
+        report = self.audit()
+        cicd003 = [f for f in report["findings"] if f.rule.id == "CICD003"]
+        self.assertEqual(len(cicd003), 2)
+
+
+class TestLLMRules(AuditFixture):
+    def test_system_prompt_fstring_flagged(self):
+        self.write("app/llm.py", 'system_prompt = f"You are {user_name}"\n')  # soc2-ignore: intentional detection-test fixture
+        report = self.audit()
+        self.assertIn("LLM001", self.rule_ids(report))
+        finding = [f for f in report["findings"] if f.rule.id == "LLM001"][0]
+        self.assertEqual(finding.severity, "HIGH")
+        self.assertIn("CC8.1", finding.rule.controls)
+        self.assertIn("LLM01", finding.rule.remediation)
+
+    def test_system_prompt_concat_and_messages_sink_flagged(self):
+        self.write("app/llm.py", 'system_prompt = BASE_PROMPT + user_input\n')  # soc2-ignore: intentional detection-test fixture
+        self.write("app/chat.py", 'messages = [{"role": "system", "content": BASE + user_input}]\n')  # soc2-ignore: intentional detection-test fixture
+        report = self.audit()
+        llm001 = [f for f in report["findings"] if f.rule.id == "LLM001"]
+        self.assertEqual(len(llm001), 2)
+
+    def test_constant_system_prompt_passes(self):
+        self.write("app/llm.py", 'system_prompt = "You are a helpful assistant."\n')
+        self.assertNotIn("LLM001", self.rule_ids(self.audit()))
+
+    def test_system_prompt_exposure_flagged(self):
+        self.write("app/llm.py", 'return system_prompt\n')  # soc2-ignore: intentional detection-test fixture
+        self.write("app/debug.js", 'console.log(system_prompt)\n')  # soc2-ignore: intentional detection-test fixture
+        report = self.audit()
+        llm002 = [f for f in report["findings"] if f.rule.id == "LLM002"]
+        self.assertEqual(len(llm002), 2)
+        self.assertIn("LLM07", llm002[0].rule.remediation)
+
+    def test_tool_output_executed_flagged(self):
+        self.write("app/agent.py", 'os.system(tool_output)\n')  # soc2-ignore: intentional detection-test fixture
+        self.write("app/agent2.py", 'subprocess.run(["sh", "-c", llm_output])\n')  # soc2-ignore: intentional detection-test fixture
+        self.write("app/agent3.py", 'eval(generated_code)\n')  # soc2-ignore: intentional detection-test fixture
+        report = self.audit()
+        llm003 = [f for f in report["findings"] if f.rule.id == "LLM003"]
+        self.assertEqual(len(llm003), 3)
+        self.assertIn("LLM06", llm003[0].rule.remediation)
+
+    def test_tool_output_logged_not_executed(self):
+        self.write("app/agent.py", 'print(tool_output)\n')
+        self.assertNotIn("LLM003", self.rule_ids(self.audit()))
+
+
+class TestK8sRules(AuditFixture):
+    def test_insecure_pod_security_context_flagged(self):
+        self.write("k8s/deploy.yaml",
+                   "spec:\n  hostNetwork: true\n  containers:\n"
+                   "  - securityContext:\n"
+                   "      privileged: true\n"
+                   "      allowPrivilegeEscalation: true\n"
+                   "      runAsNonRoot: false\n"
+                   "      runAsUser: 0\n"
+                   "      hostPID: true\n")
+        report = self.audit()
+        k8s001 = [f for f in report["findings"] if f.rule.id == "K8S001"]
+        self.assertEqual(len(k8s001), 6)
+        self.assertTrue(all(f.severity == "HIGH" for f in k8s001))
+        self.assertIn("CC6.1", k8s001[0].rule.controls)
+
+    def test_hardened_pod_passes(self):
+        self.write("k8s/deploy.yaml",
+                   "spec:\n  containers:\n  - securityContext:\n"
+                   "      allowPrivilegeEscalation: false\n"
+                   "      runAsNonRoot: true\n"
+                   "      runAsUser: 1000\n")
+        self.assertNotIn("K8S001", self.rule_ids(self.audit()))
+
+    def test_wildcard_rbac_flagged(self):
+        self.write("k8s/rbac.yaml",
+                   'rules:\n- apiGroups: [""]\n  resources: ["pods"]\n  verbs: ["*"]\n')
+        self.write("k8s/rbac2.yaml",
+                   'rules:\n- apiGroups: [""]\n  resources: ["*"]\n  verbs: ["get"]\n')
+        report = self.audit()
+        k8s002 = [f for f in report["findings"] if f.rule.id == "K8S002"]
+        self.assertEqual(len(k8s002), 2)
+
+    def test_scoped_rbac_passes(self):
+        self.write("k8s/rbac.yaml",
+                   'rules:\n- apiGroups: [""]\n  resources: ["pods"]\n  verbs: ["get", "list"]\n')
+        self.assertNotIn("K8S002", self.rule_ids(self.audit()))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

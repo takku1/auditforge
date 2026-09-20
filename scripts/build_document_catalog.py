@@ -130,11 +130,114 @@ MANUAL_DOCUMENTS = [
         "license_note": SOURCE_LICENSE["OWASP"][1],
     },
     {
+        "fdi": "manual-owasp-api-2023", "name": "OWASP API Security Top 10:2023",
+        "issuing_body": "OWASP", "geography": "General",
+        "source_url": "https://owasp.org/www-project-api-security/",
+        "family_key": "API", "license_status": "free_to_access",
+        "license_note": SOURCE_LICENSE["OWASP"][1],
+    },
+    {
+        "fdi": "manual-owasp-mobile-2024", "name": "OWASP Mobile Top 10:2024",
+        "issuing_body": "OWASP", "geography": "General",
+        "source_url": "https://owasp.org/www-project-mobile-top-10/",
+        "family_key": "MOBILE", "license_status": "free_to_access",
+        "license_note": SOURCE_LICENSE["OWASP"][1],
+    },
+    {
+        "fdi": "manual-owasp-llm-2025", "name": "OWASP Top 10 for LLM Applications 2025",
+        "issuing_body": "OWASP", "geography": "General",
+        "source_url": "https://owasp.org/www-project-top-10-for-large-language-model-applications/",
+        "family_key": "LLM", "license_status": "free_to_access",
+        "license_note": SOURCE_LICENSE["OWASP"][1],
+    },
+    {
+        "fdi": "manual-owasp-agentic-2026", "name": "OWASP Top 10 for Agentic Applications 2026",
+        "issuing_body": "OWASP", "geography": "General",
+        "source_url": "https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/",
+        "family_key": "AGENTIC", "license_status": "free_to_access",
+        "license_note": SOURCE_LICENSE["OWASP"][1] + "; indexed from the GenAI "
+                        "Security Project draft in github.com/OWASP/"
+                        "www-project-top-10-for-large-language-model-applications "
+                        "(titles only - bodies are still template placeholders).",
+    },
+    {
+        "fdi": "manual-owasp-mcp-2025", "name": "OWASP MCP Top 10:2025",
+        "issuing_body": "OWASP", "geography": "General",
+        "source_url": "https://owasp.org/www-project-mcp-top-10/",
+        "family_key": "MCP", "license_status": "free_to_access",
+        "license_note": SOURCE_LICENSE["OWASP"][1],
+    },
+    {
+        "fdi": "manual-owasp-k8s-2025", "name": "OWASP Kubernetes Top 10:2025",
+        "issuing_body": "OWASP", "geography": "General",
+        "source_url": "https://owasp.org/www-project-kubernetes-top-ten/",
+        "family_key": "K8S", "license_status": "free_to_access",
+        "license_note": SOURCE_LICENSE["OWASP"][1],
+    },
+    {
+        "fdi": "manual-owasp-cicd", "name": "OWASP Top 10 CI/CD Security Risks",
+        "issuing_body": "OWASP", "geography": "General",
+        "source_url": "https://owasp.org/www-project-top-10-ci-cd-security-risks/",
+        "family_key": "CICD", "license_status": "free_to_access",
+        "license_note": SOURCE_LICENSE["OWASP"][1],
+    },
+    {
+        "fdi": "manual-owasp-masvs", "name": "OWASP Mobile Application Security Verification Standard (MASVS)",
+        "issuing_body": "OWASP", "geography": "General",
+        "source_url": "https://masvs.owasp.org/",
+        "family_key": "MASVS", "license_status": "free_to_access",
+        "license_note": SOURCE_LICENSE["OWASP"][1],
+    },
+    {
         "fdi": "manual-mitre-attack-enterprise", "name": "MITRE ATT&CK Enterprise",
         "issuing_body": "MITRE", "geography": "General",
         "source_url": "https://attack.mitre.org/matrices/enterprise/",
         "family_key": "ATTACK", "license_status": "free_to_access",
         "license_note": SOURCE_LICENSE["MITRE"][1],
+    },
+    {
+        "fdi": "manual-mitre-atlas", "name": "MITRE ATLAS (Adversarial Threat Landscape for AI Systems)",
+        "issuing_body": "MITRE", "geography": "General",
+        "source_url": "https://github.com/mitre-atlas/atlas-data",
+        "family_key": "ATLAS", "license_status": "free_to_access",
+        "license_note": "Apache-2.0 (LICENSE file in the atlas-data repo, verified "
+                        "2026-09-20). Indexed from the auto-cloned repo's "
+                        "dist/v6/ATLAS-<date>.yaml matrix.",
+    },
+    {
+        "fdi": "manual-mitre-d3fend", "name": "MITRE D3FEND Cyber Countermeasures",
+        "issuing_body": "MITRE", "geography": "General",
+        "source_url": "https://github.com/d3fend/d3fend-ontology",
+        "family_key": "D3FEND", "license_status": "free_to_access",
+        "license_note": "MIT license (verified 2026-09-20). Indexed from the "
+                        "auto-cloned repo's src/ontology/d3fend-protege.ttl.",
+    },
+    {
+        "fdi": "manual-mitre-cwe", "name": "MITRE Common Weakness Enumeration",
+        "issuing_body": "MITRE", "geography": "General",
+        "source_url": "https://cwe.mitre.org/data/xml/cwec_latest.xml.zip",
+        "family_key": "CWE", "license_status": "free_to_access",
+        "license_note": "MITRE free download, no registration. Control text indexed "
+                        "only from a local drop-in (references/cwe/), refreshed by "
+                        "update_sources.ps1 $directDownloads.",
+    },
+    {
+        "fdi": "manual-mitre-capec", "name": "MITRE Common Attack Pattern Enumeration and Classification",
+        "issuing_body": "MITRE", "geography": "General",
+        "source_url": "https://capec.mitre.org/data/xml/capec_latest.xml",
+        "family_key": "CAPEC", "license_status": "free_to_access",
+        "license_note": "MITRE free download, no registration. Control text indexed "
+                        "only from a local drop-in (references/capec/), refreshed by "
+                        "update_sources.ps1 $directDownloads.",
+    },
+    {
+        "fdi": "manual-nist-ai-rmf-1-0", "name": "NIST AI Risk Management Framework 1.0",
+        "issuing_body": "NIST", "geography": "US",
+        "source_url": "https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-1.pdf",
+        "family_key": "AIRMF", "license_status": "public_domain",
+        "license_note": SOURCE_LICENSE["NIST"][1] + "; control text indexed from a "
+                        "local drop-in (references/nist-ai-rmf/), refreshed by "
+                        "update_sources.ps1 $directDownloads.",
     },
     {
         "fdi": "manual-fedramp-20x-ksi", "name": "FedRAMP 20x Key Security Indicators",
@@ -207,6 +310,75 @@ MANUAL_DOCUMENTS = [
         "license_note": "Form-gated download under a personal/noncommercial-only "
                         "license. Catalog/metadata entry only - never fetched; "
                         "control text only from a user-supplied drop-in (references/csa-aicm/).",
+    },
+    {
+        "fdi": "manual-disa-stig-library", "name": "DISA Security Technical Implementation Guides (STIGs)",
+        "issuing_body": "DISA", "geography": "US",
+        "source_url": "https://public.cyber.mil/stigs/downloads/",
+        "family_key": "STIG", "license_status": "public_domain",
+        "license_note": "US federal government work (17 U.S.C. §105); free download, "
+                        "no registration. Each STIG ships as a quarterly zip holding a "
+                        "*-Manual-xccdf.xml (no stable 'latest' URL, so control text is "
+                        "indexed only from a local drop-in (references/disa-stig/), never "
+                        "auto-fetched. RHEL 8/9 STIGs additionally carry executable MITRE "
+                        "SAF InSpec baselines (SAF_RHEL8/SAF_RHEL9 families).",
+    },
+    {
+        "fdi": "manual-doe-c2m2-2-1", "name": "DOE Cybersecurity Capability Maturity Model v2.1",
+        "issuing_body": "DOE", "geography": "US",
+        "source_url": "https://www.energy.gov/sites/default/files/2022-06/C2M2%20Version%202.1%20June%202022.pdf",
+        "family_key": "C2M2", "license_status": "public_domain",
+        "license_note": "US federal government work (17 U.S.C. §105). 10 domains, "
+                        "practice IDs follow the model notation DOMAIN-objective+letter "
+                        "(e.g. ASSET-1a). Control text indexed from a local drop-in "
+                        "(references/c2m2/), refreshed by update_sources.ps1 $directDownloads.",
+    },
+    {
+        "fdi": "manual-cisa-circia", "name": "Cyber Incident Reporting for Critical Infrastructure Act (CIRCIA)",
+        "issuing_body": "CISA", "geography": "US",
+        "source_url": "https://www.cisa.gov/topics/cyber-threats-and-advisories/information-sharing/cyber-incident-reporting-critical-infrastructure-act-2022-circia",
+        "family_key": "CIRCIA", "license_status": "public_domain",
+        "license_note": "US federal government work (17 U.S.C. §105). Catalog entry only: "
+                        "the statute sets 72-hour covered-incident / 24-hour ransom-payment "
+                        "clocks, but mandatory reporting starts at the final rule's effective "
+                        "date (final rule expected ~May 2026 per the 2025 unified agenda), "
+                        "so there is no control text to parse yet.",
+    },
+    {
+        "fdi": "manual-cmmc-ag-l1", "name": "CMMC 2.0 Level 1 Assessment Guide",
+        "issuing_body": "DoD", "geography": "US",
+        "source_url": "https://dodcio.defense.gov/Portals/0/Documents/CMMC/AssessmentGuideL1v2.pdf",
+        "family_key": "CMMC", "license_status": "public_domain",
+        "license_note": "US federal government work (17 U.S.C. §105). Catalog entry only: "
+                        "assessment-procedure prose, not a control catalog - practice text "
+                        "is already covered via NIST SP 800-171 and the SCF CMMC Level 1/2/3 "
+                        "crosswalk rows.",
+    },
+    {
+        "fdi": "manual-cmmc-ag-l2", "name": "CMMC 2.0 Level 2 Assessment Guide",
+        "issuing_body": "DoD", "geography": "US",
+        "source_url": "https://dodcio.defense.gov/Portals/0/Documents/CMMC/AssessmentGuideL2v2.pdf",
+        "family_key": "CMMC", "license_status": "public_domain",
+        "license_note": "US federal government work (17 U.S.C. §105). Catalog entry only: "
+                        "assessment-procedure prose, not a control catalog - practice text "
+                        "is already covered via NIST SP 800-171 and the SCF CMMC Level 1/2/3 "
+                        "crosswalk rows.",
+    },
+    {
+        "fdi": "manual-cmmc-scoping-l1", "name": "CMMC 2.0 Level 1 Scoping Guide",
+        "issuing_body": "DoD", "geography": "US",
+        "source_url": "https://dodcio.defense.gov/Portals/0/Documents/CMMC/ScopingGuideL1v2.pdf",
+        "family_key": "CMMC", "license_status": "public_domain",
+        "license_note": "US federal government work (17 U.S.C. §105). Catalog entry only: "
+                        "scope-definition prose for Level 1 self-assessments.",
+    },
+    {
+        "fdi": "manual-cmmc-scoping-l2", "name": "CMMC 2.0 Level 2 Scoping Guide",
+        "issuing_body": "DoD", "geography": "US",
+        "source_url": "https://dodcio.defense.gov/Portals/0/Documents/CMMC/ScopingGuideL2v2.pdf",
+        "family_key": "CMMC", "license_status": "public_domain",
+        "license_note": "US federal government work (17 U.S.C. §105). Catalog entry only: "
+                        "scope-definition prose for Level 2 certification assessments.",
     },
 ]
 

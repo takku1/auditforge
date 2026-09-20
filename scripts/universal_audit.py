@@ -32,9 +32,15 @@ def main():
         if args.network_targets else None
     )
     auditor.run_network_audit(override_targets)
+    auditor.run_email_audit()
+    auditor.run_cloud_posture()
+    auditor.run_sbom_audit()
     auditor.run_trivy()
     auditor.run_dependency_audit()
     auditor.run_cargo_audit()
+    auditor.run_trufflehog()
+    auditor.run_scorecard()
+    auditor.run_nuclei(override_targets)
 
     print(auditor.generate_report(args.format))
 
