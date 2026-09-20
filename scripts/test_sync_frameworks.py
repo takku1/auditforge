@@ -1049,6 +1049,23 @@ def test_parse_stig_xccdf_groups_and_rules(tmp_path):
         "DISA Security Technical Implementation Guides (XCCDF)")
 
 
+def test_parse_stig_xccdf_strips_embedded_markup(tmp_path):
+    # Real DISA descriptions carry entity-escaped <VulnDiscussion> etc.;
+    # ElementTree decodes those to literal tag-like text that itertext()
+    # passes through - the parser must strip them, keeping the prose.
+    fm, d = _fm_with(pytest, tmp_path, "stig_xccdf")
+    _write_xccdf(d / "U_DEMO_V1R1_STIG_Manual-xccdf.xml",
+                 bench_title="Demo STIG",
+                 groups=[("V-000001", "Demo requirement.",
+                          "SV-000001", "high",
+                          "&lt;VulnDiscussion&gt;Patches fix things."
+                          "&lt;/VulnDiscussion&gt;")])
+    assert fm._parse_stig_xccdf() is None
+    entry = fm.metadata["controls"]["STIG:DEMO:V-000001"]
+    assert "VulnDiscussion" not in entry
+    assert "Patches fix things." in entry
+
+
 def test_parse_stig_xccdf_namespaces_bench_per_file(tmp_path):
     # Same V-ID in two STIGs must not collide (benchmark namespace), and a
     # Benchmark @id is accepted when no <title> is present.

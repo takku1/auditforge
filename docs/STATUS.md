@@ -17,7 +17,7 @@ EU CRA obligations live 2026-09-11, CMMC Phase 2 mandatory cert starts
 document-cache + section-parser wiring), and R-058 (SOC 1 / SSAE 18 —
 AICPA-paywalled, no open source). Everything else landed, including the
 2026-09-20 full-capture expansion (`framework_metadata.json` verified at
-47,206 controls / 334 families): NIST AI 600-1 GenAI Profile (GENAI, 115),
+48,020 controls / 335 families, STIG-seeded): NIST AI 600-1 GenAI Profile (GENAI, 115),
 NIST AI RMF base text (AIRMF, 72), eight OWASP families (API, MOBILE, LLM,
 AGENTIC, MCP, K8S, CICD at 10 each; MASVS at 24; flagship Top 10:2025 as
 `top10`, 10), MITRE ATLAS (224), DOE C2M2 v2.1 (349), CWE (969) / CAPEC
@@ -114,8 +114,8 @@ to SOC 2 Common Criteria controls (human/JSON/SARIF/markdown output, baseline
 diffing, CI gating). `scripts/universal_audit.py` + `auditor/` orchestrate
 external OSS tools (Checkov/Semgrep/Trivy/OSV) per
 `config/compliance_config.yaml`. `scripts/sync_frameworks.py` regenerates the
-derived `scripts/framework_metadata.json` control index (47,206 controls /
-334 families as of 2026-09-20) from read-only KB clones — NIST OSCAL
+derived `scripts/framework_metadata.json` control index (48,020 controls /
+335 families as of 2026-09-20, STIG-seeded) from read-only KB clones — NIST OSCAL
 (800-53/800-171/CSF2), ASVS (442), MITRE ATT&CK Enterprise (697) + ICS (97)
 + Mobile (124) + MITRE ATLAS (224, YAML mappings, not STIX), every
 `compliance-as-code/controls/*.yml` file
@@ -188,8 +188,8 @@ Python deps live in a project-local `.venv/` — never the system Python.
   (ROADMAP R-103), parsed by
   `sync_frameworks.py::_parse_saf_inspec()` into `SAF_AWS`/`SAF_AZURE`/`SAF_EKS`/
   `SAF_GCP`/`SAF_GKE`/`SAF_RHEL8`/`SAF_RHEL9` families
-  (`framework_metadata.json` verified at 47,206 controls / 334 families on
-  2026-09-20). CIS Controls OSCAL (proprietary CIS Terms of Use) and the CSA CCM
+  (`framework_metadata.json` verified at 48,020 controls / 335 families on
+  2026-09-20, STIG-seeded). CIS Controls OSCAL (proprietary CIS Terms of Use) and the CSA CCM
   bundle (Fair-Use-only, gated zip) were deliberately NOT fetched - kill-switch
   blocks stand. HITRUST CSF has no machine-readable open source and no SCF
   focal-document column (workbook scanned: 0 HITRUST rows of 255) - full text

@@ -90,7 +90,7 @@ print(c.execute('SELECT * FROM documents WHERE fdi = ?', ('<fdi>',)).fetchone())
   families is still unreliable. `get_control()` still works on them for an
   exact lookup if you already know the SCF control ID.
 - **New lanes since the agentic layer (all verified in
-  `framework_metadata.json`, 47,206 controls / 334 families)**: the OWASP
+  `framework_metadata.json`, 48,020 controls / 335 families, STIG-seeded)**: the OWASP
   lane (`top10` flagship 2025 + API, MOBILE, LLM, AGENTIC, MCP, K8S, CICD,
   MASVS families), MITRE ATLAS (AI adversary tactics), NIST AI RMF base
   text (AIRMF) + GenAI Profile (GENAI), DOE C2M2 v2.1, CWE/CAPEC/D3FEND

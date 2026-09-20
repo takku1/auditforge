@@ -1370,6 +1370,11 @@ class FrameworkManager:
 
     def _parse_stig_xccdf_text(self, xml_text, filename):
         import xml.etree.ElementTree as ET
+        # Real DISA <description> bodies carry entity-escaped markup
+        # (<VulnDiscussion> etc.) that ElementTree decodes to literal
+        # tag-like text; itertext() passes it through, so strip it here
+        # (same <[^>]+> idiom as the 800-63 HTML parser below).
+        tag_re = re.compile(r"<[^>]+>")
         try:
             root = ET.fromstring(xml_text)
         except ET.ParseError:
@@ -1386,16 +1391,16 @@ class FrameworkManager:
             for child in group:
                 local = self._xml_local(child.tag)
                 if local == "title" and not title:
-                    title = re.sub(r"\s+", " ",
-                                   "".join(child.itertext())).strip()
+                    title = re.sub(r"\s+", " ", tag_re.sub(
+                        "", "".join(child.itertext()))).strip()
                 elif local == "Rule" and not rule_desc:
                     rule_id = str(child.get("id") or "").strip().upper()
                     severity = str(child.get("severity") or "").strip()
                     for sub in child:
                         if self._xml_local(sub.tag) == "description":
                             rule_desc = re.sub(
-                                r"\s+", " ",
-                                "".join(sub.itertext())).strip()
+                                r"\s+", " ", tag_re.sub(
+                                    "", "".join(sub.itertext()))).strip()
                             break
             if not title:
                 continue
