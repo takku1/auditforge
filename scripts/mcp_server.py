@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -104,6 +105,63 @@ def _embed_query(text: str):
 
 
 # --------------------------------------------------------------------------
+# Hybrid search (R-106)
+# --------------------------------------------------------------------------
+
+_FTS_ID_TOKEN = re.compile(r"[A-Za-z0-9]+(?:[._\-()/][A-Za-z0-9]+)+|[A-Za-z0-9]{2,}")
+
+
+def _fts_exact_matches(conn: sqlite3.Connection, query: str, framework: str | None, limit: int) -> list:
+    """Keyword pass over controls_fts (populated by build_vector_index.py):
+    ID-like tokens from the query match the control_id column: tokens
+    carrying a digit or separator match by prefix ("AC-2" also finds
+    "AC-2(1)"), pure-alpha tokens of length 3+ match whole, and two-letter
+    glue words are ignored. Every token is double-quoted with
+    no spaces around the column colon (older SQLite FTS5 rejects
+    `{col : ...}`), so user input can never raise; a missing controls_fts
+    table (index built before R-106) degrades to no exact hits. Returns
+    (rowid, control_id, framework, text) rows."""
+    seen, tokens = set(), []
+    for tok in _FTS_ID_TOKEN.findall(query or ""):
+        # Two-letter glue words ("at", "of", "to") collide with ID fragments
+        # ("PR.AT-1") - only longer pure-alpha tokens mint exact matches;
+        # anything carrying a digit or separator (AC-2, CWE-79) always counts.
+        if tok.isalpha() and len(tok) < 3:
+            continue
+        upper = tok.upper()
+        if upper not in seen:
+            seen.add(upper)
+            tokens.append(tok)
+    if not tokens:
+        return []
+    # Prefix (*) only on ID-shaped tokens (digit or separator: AC-2 finds
+    # AC-2(1)); pure-alpha tokens match whole ("rest" must not prefix-match
+    # "restrict_admin").
+    def _clause(t):
+        if any(c.isdigit() or c in ".-_()/" for c in t):
+            return f'control_id:"{t}"*'
+        return f'control_id:"{t}"'
+    match = " OR ".join(_clause(t) for t in tokens)
+    # Full-ID equality on the longest token outranks prefix siblings, so
+    # "AC-2" beats "PR.AC-2"/"AC-2(1)" regardless of rowid order. Tokens
+    # match [A-Za-z0-9._\-()/]+ (no quotes possible), so the CASE literal
+    # cannot break out of its string.
+    best = max(tokens, key=len).upper()
+    sql = ("SELECT rowid, control_id, framework, text FROM controls_fts "
+           "WHERE controls_fts MATCH ?")
+    params: list = [match]
+    if framework:
+        sql += " AND framework = ?"
+        params.append(framework)
+    sql += f" ORDER BY CASE WHEN upper(control_id) = '{best}' THEN 0 ELSE 1 END, rowid LIMIT ?"
+    params.append(limit)
+    try:
+        return conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+
+# --------------------------------------------------------------------------
 # Tools
 # --------------------------------------------------------------------------
 
@@ -126,7 +184,11 @@ def search_controls(query: str, framework: str | None = None, top_k: int = 10) -
     through the SCF's own shared control-ID structure (deterministic, not
     similarity-based). get_control() also still works against an SCF_*
     family if you already know the exact SCF control ID. Returns the top_k
-    best matches with a similarity distance (lower = closer)."""
+    best matches with a similarity distance (lower = closer). Hybrid
+    retrieval: exact control-ID hits (match="exact", distance 0.0) lead, so
+    asking for "AC-2" or "CWE-79" returns that control first - trust it and
+    stop there instead of reading further; semantic neighbors follow with
+    match="semantic"."""
     conn = _vector_conn()
     q = _embed_query(query)
     top_k = max(1, min(top_k, 50))
@@ -154,12 +216,23 @@ def search_controls(query: str, framework: str | None = None, top_k: int = 10) -
             """,
             (q, top_k),
         ).fetchall()
+    # Exact keyword hits lead (match="exact") so an agent asking for "AC-2"
+    # gets AC-2 first instead of burning context on near-misses; semantic
+    # neighbors follow with match="semantic", deduplicated, capped at top_k.
+    results, seen_keys = [], set()
+    for _rowid, cid, fw, text in _fts_exact_matches(conn, query, framework, top_k):
+        key = (fw, cid)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            results.append({"control_id": cid, "framework": fw, "text": text, "distance": 0.0, "match": "exact"})
+    for r in rows:
+        key = (r[1], r[0])
+        if key not in seen_keys:
+            seen_keys.add(key)
+            results.append({"control_id": r[0], "framework": r[1], "text": r[2], "distance": round(r[3], 4), "match": "semantic"})
     return {
         "query": query,
-        "results": [
-            {"control_id": r[0], "framework": r[1], "text": r[2], "distance": round(r[3], 4)}
-            for r in rows
-        ],
+        "results": results[:top_k],
     }
 
 

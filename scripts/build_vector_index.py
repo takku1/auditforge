@@ -95,6 +95,16 @@ CREATE TABLE IF NOT EXISTS scf_crosswalk_tokens (
     scf_id TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_scf_tokens_token ON scf_crosswalk_tokens(token);
+
+-- R-106: hybrid search. FTS5 keyword table over the same control rows so
+-- exact-ID queries ("AC-2", "CWE-79", "SV-230221") hit deterministically
+-- instead of hoping the embedding ranks them first. Populated alongside
+-- controls_meta (same rowids); queried first by search_controls(), which
+-- merges exact hits ahead of vector results. No new dependencies (FTS5
+-- ships in stdlib sqlite3) and no extra model calls at query time.
+CREATE VIRTUAL TABLE IF NOT EXISTS controls_fts USING fts5(
+    control_id, framework, text, tokenize = "unicode61 remove_diacritics 2"
+);
 """
 
 _SCF_TOKEN_STRIP = ",;:"
@@ -231,6 +241,10 @@ def build(batch_size: int = 64) -> dict:
             conn.execute(
                 "INSERT INTO controls_vec (rowid, embedding, framework) VALUES (?, ?, ?)",
                 (rowid, sqlite_vec.serialize_float32(emb.tolist()), framework),
+            )
+            conn.execute(
+                "INSERT INTO controls_fts (rowid, control_id, framework, text) VALUES (?, ?, ?, ?)",
+                (rowid, control_id, framework, description),
             )
         control_count += len(batch_texts)
         batch_texts.clear()

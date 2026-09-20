@@ -40,6 +40,7 @@ def _build_fixture_index(path: Path):
         CREATE TABLE documents_meta (rowid INTEGER PRIMARY KEY, fdi TEXT, chunk_index INTEGER, source TEXT, text TEXT);
         CREATE TABLE scf_crosswalk_tokens (token TEXT, scf_family TEXT, scf_id TEXT);
         CREATE INDEX idx_scf_tokens_token ON scf_crosswalk_tokens(token);
+        CREATE VIRTUAL TABLE controls_fts USING fts5(control_id, framework, text);
         """
     )
     # DIM is a hardcoded int constant (test-only vector size), not
@@ -61,6 +62,7 @@ def _build_fixture_index(path: Path):
     ]
     for i, (cid, fw, text) in enumerate(rows, start=1):
         conn.execute("INSERT INTO controls_meta (rowid, control_id, framework, text) VALUES (?, ?, ?, ?)", (i, cid, fw, text))
+        conn.execute("INSERT INTO controls_fts (rowid, control_id, framework, text) VALUES (?, ?, ?, ?)", (i, cid, fw, text))
         conn.execute(
             "INSERT INTO controls_vec (rowid, embedding, framework) VALUES (?, ?, ?)",
             (i, sqlite_vec.serialize_float32(_fake_vec(text)), fw),
@@ -99,6 +101,73 @@ def test_search_controls_framework_filter_uses_partition_key(tmp_path, monkeypat
     result = mcp_server.search_controls("q", framework="NIST53", top_k=5)
     assert all(r["framework"] == "NIST53" for r in result["results"])
     assert len(result["results"]) == 1
+
+
+def test_search_controls_exact_id_match_first(tmp_path, monkeypatch):
+    # Hybrid search (R-106): an exact control-ID query surfaces that control
+    # first with match="exact", even when the vector ranking disagrees (the
+    # mocked query embedding is closest to CC6.1's text, not AC-2's).
+    conn = _build_fixture_index(tmp_path / "vector_index.db")
+    monkeypatch.setattr(mcp_server, "_vec_conn", conn)
+    monkeypatch.setattr(mcp_server, "_embed_query", lambda q: sqlite_vec.serialize_float32(_fake_vec("Logical access controls restrict system access.")))
+
+    result = mcp_server.search_controls("AC-2", top_k=3)
+    assert result["results"][0]["control_id"] == "AC-2"
+    assert result["results"][0]["match"] == "exact"
+
+
+def test_search_controls_exact_match_respects_framework(tmp_path, monkeypatch):
+    # IAC-01 exists in two SCF families; a framework filter must scope the
+    # exact-match pass too.
+    conn = _build_fixture_index(tmp_path / "vector_index.db")
+    monkeypatch.setattr(mcp_server, "_vec_conn", conn)
+    monkeypatch.setattr(mcp_server, "_embed_query", lambda q: sqlite_vec.serialize_float32(_fake_vec("anything")))
+
+    result = mcp_server.search_controls("IAC-01", framework="SCF_GENERAL_NIST_800_53_R5", top_k=5)
+    assert len(result["results"]) >= 1
+    assert all(r["framework"] == "SCF_GENERAL_NIST_800_53_R5" for r in result["results"] if r["match"] == "exact")
+
+
+def test_search_controls_common_words_not_exact(tmp_path, monkeypatch):
+    # R-106 follow-up: two-letter glue words ("at", "of") collide with ID
+    # fragments ("PR.AT-1") - they must not mint exact matches. A natural
+    # language query with no ID-like token is purely semantic.
+    conn = _build_fixture_index(tmp_path / "vector_index.db")
+    monkeypatch.setattr(mcp_server, "_vec_conn", conn)
+    monkeypatch.setattr(mcp_server, "_embed_query", lambda q: sqlite_vec.serialize_float32(_fake_vec("anything")))
+
+    conn.execute("INSERT INTO controls_meta (rowid, control_id, framework, text) VALUES (98, 'PR.AT-1', 'NIST', 'Awareness training.')")
+    conn.execute("INSERT INTO controls_fts (rowid, control_id, framework, text) VALUES (98, 'PR.AT-1', 'NIST', 'Awareness training.')")
+    conn.commit()
+
+    result = mcp_server.search_controls("encryption at rest", top_k=5)
+    assert all(r["match"] == "semantic" for r in result["results"])
+
+
+def test_search_controls_full_id_beats_prefix(tmp_path, monkeypatch):
+    # "AC-2" must rank the full-ID equality above prefix siblings like
+    # PR.AC-2 (row inserted here so the shared fixture is untouched).
+    conn = _build_fixture_index(tmp_path / "vector_index.db")
+    conn.execute("INSERT INTO controls_meta (rowid, control_id, framework, text) VALUES (0, 'PR.AC-2', 'NIST', 'Identity management.')")
+    conn.execute("INSERT INTO controls_fts (rowid, control_id, framework, text) VALUES (0, 'PR.AC-2', 'NIST', 'Identity management.')")
+    conn.commit()
+    monkeypatch.setattr(mcp_server, "_vec_conn", conn)
+    monkeypatch.setattr(mcp_server, "_embed_query", lambda q: sqlite_vec.serialize_float32(_fake_vec("anything")))
+
+    result = mcp_server.search_controls("AC-2", top_k=5)
+    exact = [r for r in result["results"] if r["match"] == "exact"]
+    assert exact[0]["control_id"] == "AC-2"
+
+
+def test_search_controls_fts_syntax_never_raises(tmp_path, monkeypatch):
+    # FTS5 query syntax in user input (parens, OR, quotes) must degrade to
+    # a safe quoted-phrase match, never raise sqlite3.OperationalError.
+    conn = _build_fixture_index(tmp_path / "vector_index.db")
+    monkeypatch.setattr(mcp_server, "_vec_conn", conn)
+    monkeypatch.setattr(mcp_server, "_embed_query", lambda q: sqlite_vec.serialize_float32(_fake_vec("anything")))
+
+    result = mcp_server.search_controls('AC-2) OR (1=1 "unbalanced', top_k=5)
+    assert isinstance(result["results"], list)
 
 
 def test_get_control_found_and_not_found(tmp_path, monkeypatch):

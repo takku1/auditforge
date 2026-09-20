@@ -95,16 +95,18 @@ print(c.execute('SELECT * FROM documents WHERE fdi = ?', ('<fdi>',)).fetchone())
   MASVS families), MITRE ATLAS (AI adversary tactics), NIST AI RMF base
   text (AIRMF) + GenAI Profile (GENAI), DOE C2M2 v2.1, CWE/CAPEC/D3FEND
   machine-readable exports, CISA CPG 2.0, CVSS v4 metrics, SAMM v2, NIST SP
-  800-63-4, SAF RHEL 8/9 STIG baselines, and the DISA STIG XCCDF parser
-  (no-op until a quarterly zip is dropped into `references/disa-stig/`).
+  800-63-4, SAF RHEL 8/9 STIG baselines, DISA STIG XCCDF requirements
+  (RHEL 8/9 quarterly zips seeded in gitignored `references/disa-stig/`),
+  and the FFIEC InfoSec booklet (41-section FFIEC family). Hybrid
+  `search_controls` (R-106): exact control-ID hits (`match="exact"`) lead
+  vector neighbors (`match="semantic"`) - trust an exact hit and stop.
   Catalog-only rows (no control text yet): CIRCIA, CMMC 2.0 assessment/scoping
-  guides, DISA STIG library, C2M2.
+  guides.
 - **Vulnerability prioritization**: OSV (via `universal_audit.py`) tells you
   a dependency has *a* known vulnerability; `kev_lookup`/`epss_lookup` tell
   you whether that vulnerability is one anyone is actually exploiting -
   combine both before recommending urgent remediation.
 - See `ROADMAP.md` for open gaps (HITRUST R-027 and SOC 1/SSAE 18 R-058
-  have no machine-readable open source; FFIEC IT Handbook R-057 still needs
-  parser wiring; CIS Controls v8.1 master Excel is registration-gated and
-  CCM v4.1 is indexed minimally as IDs+titles only under Fair-Use terms) and
-  `docs/STATUS.md` for current architecture/phase.
+  have no machine-readable open source; CIS Controls v8.1 master Excel is
+  registration-gated and CCM v4.1 is indexed minimally as IDs+titles only
+  under Fair-Use terms) and `docs/STATUS.md` for current architecture/phase.
