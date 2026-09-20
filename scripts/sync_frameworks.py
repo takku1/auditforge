@@ -46,6 +46,11 @@ class FrameworkManager:
         # refreshed by update_sources.ps1 $directDownloads, same wiring as
         # the AI RMF PDF).
         "c2m2":            {"local_path": "references/c2m2", "dropin": True},
+        # FFIEC IT Handbook Information Security booklet PDF (US federal
+        # work, public domain - manual drop-in; ffiec.gov WAF-blocks this
+        # network, so the seed came via a Wayback capture of the official
+        # ithandbook.ffiec.gov PDF; refresh by re-drop, see R-057).
+        "ffiec":           {"local_path": "references/ffiec", "dropin": True},
         "ssdf":          {"local_path": "oscal-content/nist.gov/SP800-218/ver1/json/NIST_SP800-218_ver1_catalog.json"},
         "top10_2025":    {"local_path": "owasp-top10/2025/docs/en"},
         "samm":          {"local_path": "references/samm", "dropin": True},
@@ -188,6 +193,7 @@ class FrameworkManager:
         # absent (see _parse_stig_xccdf / _parse_c2m2).
         self._parse_stig_xccdf()
         self._parse_c2m2()
+        self._parse_ffiec()
         # OWASP Top 10 OSIB export is a deeply nested CWE-linkage graph, not a
         # flat control list; the indexed Top 10:2025 categories come from the
         # 2025/docs/en markdown in the same clone (see _parse_top10_2025).
@@ -1607,6 +1613,114 @@ class FrameworkManager:
             return
         n = self._parse_c2m2_from_text(text)
         print(f"[i] c2m2: {n} practices indexed")
+
+    def _parse_ffiec_from_text(self, text):
+        """Indexes FFIEC IT Handbook Information Security booklet sections:
+        dotted subsections (II.C.19 -> FFIEC:IS-II-C-19, body prose only -
+        the key already carries the section identity) and Appendix A
+        examination objectives (Objective N -> FFIEC:IS-OBJN, directive
+        title plus procedure prose). TOC lines with dot leaders and lone
+        page numbers never index. Returns the count added."""
+        sub_re = re.compile(r"^(II\.[A-Z](?:\.\d+)?)\s+(.+?)\s*$")
+        obj_re = re.compile(r"^Objective\s+(\d+)\s*:\s*(.+?)\s*$")
+        lines = text.splitlines()
+        items = []  # (key, title, is_objective)
+        for line in lines:
+            s = line.strip()
+            if not s or s.isdigit() or "...." in s:
+                continue
+            m = obj_re.match(s)
+            if m:
+                items.append((f"FFIEC:IS-OBJ{m.group(1)}", m.group(2),
+                              True))
+                continue
+            m = sub_re.match(s)
+            if m:
+                sec = m.group(1).replace(".", "-")
+                items.append((f"FFIEC:IS-{sec}", m.group(2), False))
+        n = 0
+        for idx, (key, title, is_objective) in enumerate(items):
+            body_parts = self._ffiec_section_body(
+                lines, title,
+                items[idx + 1][1] if idx + 1 < len(items) else None)
+            body = re.sub(r"\s+", " ", " ".join(body_parts)).strip()
+            # pypdf merges running header + roman folio + body start onto
+            # one line ("September 2016 ii September 2016 1 ..."): strip
+            # the month-year header chunk and a leading bare page folio
+            # (digits not followed by a period, so "1. Review ..." lists
+            # survive).
+            body = re.sub(
+                r"(?:FFIEC IT Examination Handbook Information Security"
+                r"\s+)?September 2016\s+[ivxlcdm]+\s+"
+                r"(?:September 2016\s+\d+\s*)?", "", body)
+            # Mid-page footers pypdf merges into prose ("...examiners.
+            # September 2016 26 attached ..."): strip the month-year plus
+            # arabic folio anywhere it occurs. Genuine prose uses ("September
+            # 2016," / "September 2016 revision") never match the bare
+            # month-year-plus-digits shape.
+            body = re.sub(r"September 2016\s+\d{1,3}(?!\d)\s*", "", body)
+            body = re.sub(r"^\d{1,3}(?!\.)\s+", "", body).strip()
+            if is_objective:
+                entry = (title + (" " + body[:600] if body else "")).strip()
+            else:
+                entry = body[:600] or title
+            if key not in self.metadata["controls"]:
+                self.metadata["controls"][key] = entry[:2000]
+                n += 1
+        if n:
+            self.metadata["frameworks"]["FFIEC"] = (
+                "FFIEC IT Examination Handbook: Information Security")
+        return n
+
+    @staticmethod
+    def _ffiec_section_body(lines, title, next_title):
+        """Collects prose lines after a section's title line up to (but
+        excluding) the next section's title line; skips TOC leaders,
+        page numbers, PDF running headers/footers, and blank lines."""
+        footer_re = re.compile(r"^[ivxlcdm]{2,6}$", re.I)
+        body, active = [], False
+        for line in lines:
+            s = line.strip()
+            if not active:
+                if title in s and (s == title or s.endswith(title)):
+                    active = True
+                continue
+            if next_title and next_title in s:
+                break
+            if (not s or s.isdigit() or "...." in s
+                    or footer_re.match(s)
+                    or s.startswith("FFIEC IT Examination Handbook")):
+                continue
+            body.append(s)
+        return body
+
+    def _parse_ffiec(self):
+        """Indexes the FFIEC IT Handbook Information Security booklet PDF
+        (references/ffiec/, US federal work - same lazy-pypdf wiring as
+        _parse_c2m2/_parse_genai: a missing dependency or file degrades
+        to a no-op). SCF crosswalk rows already map FFIEC clauses; this
+        adds the native section and examination-objective text.
+        """
+        base = Path(self.SOURCES["ffiec"]["local_path"])
+        if not base.is_dir():
+            return
+        cands = sorted(base.glob("FFIEC*.pdf")) + sorted(base.glob("*.pdf"))
+        if not cands:
+            return
+        path = cands[0]
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            print("[i] ffiec: pypdf unavailable - skipping")
+            return
+        try:
+            reader = PdfReader(str(path))
+            text = "\n".join((p.extract_text() or "") for p in reader.pages)
+        except Exception as e:
+            print(f"[i] ffiec: unreadable PDF ({e}) - skipping")
+            return
+        n = self._parse_ffiec_from_text(text)
+        print(f"[i] ffiec: {n} sections indexed")
 
     def _walk_named_descriptions(self, node, prefix):
         """Recursive name+description indexer over a decoded YAML/JSON doc;

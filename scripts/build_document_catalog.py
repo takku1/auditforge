@@ -334,6 +334,19 @@ MANUAL_DOCUMENTS = [
                         "(references/c2m2/), refreshed by update_sources.ps1 $directDownloads.",
     },
     {
+        "fdi": "manual-ffiec-infosec", "name": "FFIEC IT Examination Handbook: Information Security (Sept 2016)",
+        "issuing_body": "FFIEC", "geography": "US",
+        "source_url": "https://ithandbook.ffiec.gov/ITBooklets/FFIEC_ITBooklet_InformationSecurity.pdf",
+        "family_key": "FFIEC", "license_status": "public_domain",
+        "license_note": "US federal government work (17 U.S.C. §105). Dotted "
+                        "subsections (II.*) and Appendix A examination objectives "
+                        "indexed as FFIEC:IS-* from a local drop-in "
+                        "(references/ffiec/). ffiec.gov WAF-blocks automated "
+                        "fetching from some networks; the seed came via a Wayback "
+                        "capture of the official PDF (see update_sources.ps1 "
+                        "$directDownloads); refresh by re-drop.",
+    },
+    {
         "fdi": "manual-cisa-circia", "name": "Cyber Incident Reporting for Critical Infrastructure Act (CIRCIA)",
         "issuing_body": "CISA", "geography": "US",
         "source_url": "https://www.cisa.gov/topics/cyber-threats-and-advisories/information-sharing/cyber-incident-reporting-critical-infrastructure-act-2022-circia",

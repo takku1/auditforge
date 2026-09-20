@@ -257,10 +257,12 @@ if __name__ == "__main__":
 
 
 class TestPlatformManualDocuments(unittest.TestCase):
-    # R-069/R-070/R-104/R-105: platform/regulation catalog entries carry
-    # real remote URLs for re-cache; no control text is parsed for CIRCIA
-    # (rule not final) or CMMC guides (assessment prose, not a catalog).
+    # R-057/R-069/R-070/R-104/R-105: platform/regulation catalog entries
+    # carry real remote URLs for re-cache; no control text is parsed for
+    # CIRCIA (rule not final) or CMMC guides (assessment prose, not a
+    # catalog).
     EXPECTED = {
+        "manual-ffiec-infosec": "https://ithandbook.ffiec.gov/",
         "manual-disa-stig-library": "https://public.cyber.mil/stigs/downloads/",
         "manual-doe-c2m2-2-1": "https://www.energy.gov/sites/default/files/2022-06/",
         "manual-cisa-circia": "https://www.cisa.gov/",

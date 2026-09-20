@@ -1122,6 +1122,49 @@ def test_stig_c2m2_parsers_noop_when_absent(tmp_path):
     assert fm.metadata["frameworks"] == {}
 
 
+def test_parse_ffiec_from_text_infosec(tmp_path):
+    # R-057: FFIEC IT Handbook Information Security booklet shapes - dotted
+    # subsections (II.C.19) and examination objectives; TOC lines with dot
+    # leaders and lone page numbers must not index.
+    fm, _d = _fm_with(pytest, tmp_path, "ffiec")
+    text = (
+        "II.C.19 Encryption ............................ 40 \n"
+        "II.C.19 Encryption \n"
+        "FFIEC IT Examination Handbook Information Security September 2016 \n"
+        "iii \n"
+        "Encryption protects the confidentiality of information. \n"
+        "II.D Monitoring and Reporting \n"
+        "Objective 1: Determine the appropriate scope and objectives. \n"
+        "1. Review past reports for outstanding issues. \n"
+        "Objective 2: Determine whether governance is effective. \n")
+    n = fm._parse_ffiec_from_text(text)
+    controls = fm.metadata["controls"]
+    assert n == 4
+    assert controls["FFIEC:IS-II-C-19"] == (
+        "Encryption protects the confidentiality of information.")
+    assert "FFIEC IT Examination Handbook" not in controls["FFIEC:IS-II-C-19"]
+    assert controls["FFIEC:IS-OBJ1"] == (
+        "Determine the appropriate scope and objectives. "
+        "1. Review past reports for outstanding issues.")
+    assert fm.metadata["frameworks"]["FFIEC"] == (
+        "FFIEC IT Examination Handbook: Information Security")
+
+
+def test_parse_ffiec_strips_inline_running_headers(tmp_path):
+    # pypdf merges the running header, roman folio, and body start onto one
+    # line ("September 2016 ii September 2016 1 Introduction ...") - the
+    # header chunk and bare page folio must go, the prose must stay.
+    fm, _d = _fm_with(pytest, tmp_path, "ffiec")
+    text = (
+        "II.A.3 Supervision of Resources \n"
+        "September 2016 ii September 2016 1 Introduction \n"
+        "This booklet September 2016 26 guides examiners. \n")
+    n = fm._parse_ffiec_from_text(text)
+    assert n == 1
+    entry = fm.metadata["controls"]["FFIEC:IS-II-A-3"]
+    assert entry == "Introduction This booklet guides examiners."
+
+
 def test_parse_c2m2_from_text(tmp_path):
     fm, _d = _fm_with(pytest, tmp_path, "c2m2")
     text = (

@@ -84,3 +84,4 @@ references/c2m2/
 # DISA STIG XCCDF quarterly zips (manual drop-in - versioned, no "latest"
 # URL; never committed, same rule as (a) above).
 references/disa-stig/
+references/ffiec/

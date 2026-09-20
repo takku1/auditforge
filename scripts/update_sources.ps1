@@ -104,6 +104,11 @@ $directDownloads = [ordered]@{
     'references/capec/capec_latest.xml'          = 'https://capec.mitre.org/data/xml/capec_latest.xml'
     'references/nist-ai-rmf/NIST.AI.100-1.pdf'   = 'https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-1.pdf'
     'references/c2m2/C2M2-Version-2.1.pdf'          = 'https://www.energy.gov/sites/default/files/2022-06/C2M2%20Version%202.1%20June%202022.pdf'
+    # R-057: official ithandbook.ffiec.gov/ffiec.gov PDF URLs WAF-block
+    # automated fetching (403 from multiple egresses); this Wayback capture
+    # of the official Sept-2016 InfoSec booklet is the working refresh until
+    # the FFIEC stops blocking. Verify content-type is application/pdf.
+    'references/ffiec/FFIEC_ITBooklet_InformationSecurity-2016.pdf' = 'https://web.archive.org/web/20161122112112id_/http://ithandbook.ffiec.gov/ITBooklets/FFIEC_ITBooklet_InformationSecurity.pdf'
 }
 
 foreach ($rel in $directDownloads.Keys) {
