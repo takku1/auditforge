@@ -1,0 +1,63 @@
+name: Freshness
+
+# Weekly knowledge-stack refresh: pull every KB to latest, regenerate the
+# derived metadata, run the freshness gate, and commit the manifest +
+# metadata when the gate passes. This is the "pipeline for full update over
+# time" - per-push CI deliberately does NOT do this (multi-GB clones on
+# every push); weekly is the right cadence. Vector-index rebuilds and
+# document-cache fills stay manual/local (too heavy for CI).
+#
+# Local equivalent:
+#   pwsh scripts/update_sources.ps1
+#   python scripts/check_freshness.py --skip-kev   # offline-safe preview
+#   python scripts/check_freshness.py --write       # record new baseline
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"  # Mondays 04:17 UTC
+  workflow_dispatch: {}     # manual "refresh now" button
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    # Least privilege, scoped to the one job that needs it: this job commits
+    # the refreshed manifest + metadata back (see "Commit manifest" step).
+    permissions:
+      contents: write  # soc2-ignore: job pushes the freshness refresh commit; read-only cannot push
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Pull knowledge bases + regenerate metadata
+        shell: pwsh
+        run: ./scripts/update_sources.ps1
+
+      # Best-effort engine refresh (R-107): template/DB updates feed the new
+      # baseline; failures warn inside the script and never fail the job.
+      - name: Refresh engines (best-effort)
+        run: python scripts/update_engines.py
+
+      # Gate first: a silently-zeroed family (upstream format change breaking
+      # a parser) must stop the train BEFORE the baseline is overwritten.
+      - name: Freshness gate
+        run: python scripts/check_freshness.py --max-drop-pct 10
+
+      - name: Record new baseline
+        run: python scripts/check_freshness.py --write
+
+      - name: Run test suite
+        run: python -m pytest scripts/ -p no:randomly -q
+
+      - name: Commit manifest + metadata
+        run: |
+          git config user.name "auditforge-freshness"
+          git config user.email "auditforge-freshness@local"
+          git add scripts/freshness_manifest.json scripts/framework_metadata.json
+          git diff --cached --quiet || git commit -m "chore: weekly freshness refresh"
+          git push

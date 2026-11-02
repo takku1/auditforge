@@ -26,23 +26,27 @@ def _git_tracked_files(root: str):
 
 
 def audit_directory(root: str, excludes: list = None, min_severity: str = "LOW",
-                     history: bool = False, disabled_rules: set = None) -> dict:
-    from .scanners import iter_files, scan_file, scan_git_history
+                     history: bool = False, disabled_rules: set = None,
+                     pii_allow: list = None) -> dict:
+    from .scanners import iter_files, scan_file, scan_git_history, scan_web_posture
     from datetime import datetime, timezone
     excludes = excludes or []
     disabled_rules = disabled_rules or set()
+    pii_allow = pii_allow or []
     findings = []
     files_scanned = 0
     skipped = {"oversized": 0, "binary": 0, "unreadable": 0}
     for path, rel in iter_files(root, excludes):
         files_scanned += 1
-        file_findings, skip_reason = scan_file(path, rel)
+        file_findings, skip_reason = scan_file(path, rel, pii_allow)
         if skip_reason:
             skipped[skip_reason] += 1
         findings.extend(file_findings)
 
     if history:
-        findings.extend(scan_git_history(root, excludes))
+        findings.extend(scan_git_history(root, excludes, pii_allow=pii_allow))
+
+    findings.extend(scan_web_posture(root, excludes))
 
     tracked = _git_tracked_files(root)
     if tracked is not None:

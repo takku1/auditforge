@@ -15,7 +15,10 @@ ones with MCP wired up.
 **Prefer the MCP tools when connected** (they hit `scripts/vector_index.db`
 directly - sub-second, no full-file loads): `search_controls`, `get_control`,
 `list_frameworks`, `crosswalk_rule`, `crosswalk_control`, `search_documents`,
-`get_document`, `run_audit`, `kev_lookup`, `epss_lookup`, `nvd_lookup`. If
+`get_document`, `run_audit`, `run_universal_audit`, `engine_status`,
+`audit_policy_docs`, `run_gap_analysis`, `ledger_stats`,
+`validate_findings_report`, `validate_coverage_ledger_report`,
+`check_freshness`, `kev_lookup`, `epss_lookup`, `nvd_lookup`. If
 those tools aren't available in this session, fall back to the CLI below -
 same underlying data, just slower to invoke per-call.
 
@@ -53,6 +56,23 @@ import json; print(json.dumps(search_controls('<query>', top_k=5), indent=2))
 
 # Compliance scan (the CLAUDE.md Review Loop's mandated check)
 .venv/Scripts/python.exe scripts/audit_repo.py <path> --fail-on HIGH
+
+# Full multi-engine sweep (same as run_universal_audit MCP tool)
+.venv/Scripts/python.exe scripts/universal_audit.py <path> --format json
+
+# Must-build gap analysis: what this stack SHOULD have vs what it has
+.venv/Scripts/python.exe scripts/gap_analysis.py <path> --domain auto
+
+# Governance/policy document coverage (15-policy catalog + live citations)
+.venv/Scripts/python.exe scripts/policy_audit.py <path>
+
+# Finding lifecycle + validators (same as ledger_stats / validate_* tools)
+.venv/Scripts/python.exe scripts/ledger.py stats --repo <name>
+.venv/Scripts/python.exe scripts/validate_findings.py findings.json
+.venv/Scripts/python.exe scripts/validate_coverage_ledger.py coverage-ledger.json
+
+# Knowledge-stack freshness gate (same as check_freshness MCP tool)
+.venv/Scripts/python.exe scripts/check_freshness.py --skip-kev
 
 # Vulnerability intel for one CVE (KEV + EPSS combined)
 .venv/Scripts/python.exe scripts/vuln_intel.py --enrich CVE-2024-3400

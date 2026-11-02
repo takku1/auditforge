@@ -143,6 +143,36 @@ def test_enrich_cve_combines_sources(tmp_path, monkeypatch):
     assert result["epss"]["epss"] == 0.99999
 
 
+def test_kev_catalog_ids_sorted_and_cached():
+    conn = _mem_conn()
+    payload = {"vulnerabilities": [
+        {"cveID": "CVE-2024-0002"}, {"cveID": "CVE-2024-0001"},
+        {"cveID": "CVE-2024-0001"}, {"cveID": ""},
+    ]}
+    with patch("vuln_intel.requests.get",
+               return_value=_fake_response(text_body=json.dumps(payload))):
+        ids, fetched_at = vuln_intel.kev_catalog_ids(conn)
+    assert ids == ["CVE-2024-0001", "CVE-2024-0002"]
+    assert fetched_at is not None
+    # second call uses cache - no HTTP
+    with patch("vuln_intel.requests.get",
+               side_effect=AssertionError("must not refetch")):
+        ids2, _ = vuln_intel.kev_catalog_ids(conn)
+    assert ids2 == ids
+
+
+def test_kev_catalog_ids_offline_no_cache_raises():
+    conn = _mem_conn()
+    with patch("vuln_intel.requests.get",
+               side_effect=Exception("no route")):
+        try:
+            vuln_intel.kev_catalog_ids(conn)
+        except RuntimeError as exc:
+            assert "no cache" in str(exc)
+        else:
+            raise AssertionError("expected RuntimeError")
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

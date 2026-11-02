@@ -301,6 +301,128 @@ def test_kev_lookup_wraps_vuln_intel():
     assert result["cve"] == "CVE-2024-3400"
 
 
+def test_run_universal_audit_parses_json(tmp_path):
+    import subprocess as _sp
+    payload = {"summary": {"total": 1}, "findings": [],
+               "engine_availability": {}, "engine_errors": [],
+               "run_status": "complete", "run_status_reason": ""}
+    mock_result = _sp.CompletedProcess(args=[], returncode=0,
+                                       stdout=json.dumps(payload), stderr="")
+    with patch("mcp_server.subprocess.run", return_value=mock_result) as m:
+        result = mcp_server.run_universal_audit(str(tmp_path))
+    assert result["summary"]["total"] == 1
+    assert result["returncode"] == 0
+    cmd = m.call_args.args[0]
+    assert "--format" in cmd and "json" in cmd
+
+    with patch("mcp_server.subprocess.run", return_value=mock_result) as m:
+        mcp_server.run_universal_audit(str(tmp_path), engines=["semgrep", "osv"])
+    cmd = m.call_args.args[0]
+    assert "--engines" in cmd and "semgrep,osv" in cmd
+
+
+def test_run_universal_audit_timeout_is_error_dict(tmp_path):
+    import subprocess as _sp
+    with patch("mcp_server.subprocess.run",
+               side_effect=_sp.TimeoutExpired("cmd", 600)):
+        result = mcp_server.run_universal_audit(str(tmp_path), timeout_s=600)
+    assert "timed out" in result["error"]
+
+
+def test_engine_status_reports_binaries():
+    result = mcp_server.engine_status()
+    assert set(result["engines"]) == {"checkov", "semgrep", "trivy",
+                                      "cargo-audit", "nuclei", "scorecard",
+                                      "trufflehog"}
+
+
+def test_audit_policy_docs_parses_json(tmp_path):
+    import subprocess as _sp
+    payload = {"target": str(tmp_path),
+               "summary": {"present": 1, "missing (must)": 1},
+               "policies": [], "unresolved_refs": []}
+    mock_result = _sp.CompletedProcess(args=[], returncode=0,
+                                       stdout=json.dumps(payload), stderr="")
+    with patch("mcp_server.subprocess.run", return_value=mock_result) as m:
+        result = mcp_server.audit_policy_docs(str(tmp_path))
+    assert result["summary"]["present"] == 1
+    assert result["returncode"] == 0
+    cmd = m.call_args.args[0]
+    assert "policy_audit.py" in cmd[1]
+
+
+def test_audit_policy_docs_timeout_is_error_dict(tmp_path):
+    import subprocess as _sp
+    with patch("mcp_server.subprocess.run",
+               side_effect=_sp.TimeoutExpired("cmd", 300)):
+        result = mcp_server.audit_policy_docs(str(tmp_path))
+    assert "timed out" in result["error"]
+
+def test_run_gap_analysis_parses_json(tmp_path):
+    import subprocess as _sp
+    payload = {"domain": "website", "summary": {}, "capabilities": [],
+               "unresolved_refs": []}
+    mock_result = _sp.CompletedProcess(args=[], returncode=0,
+                                       stdout=json.dumps(payload), stderr="")
+    with patch("mcp_server.subprocess.run", return_value=mock_result) as m:
+        result = mcp_server.run_gap_analysis(str(tmp_path))
+    assert result["domain"] == "website"
+    assert result["returncode"] == 0
+    cmd = m.call_args.args[0]
+    assert "gap_analysis.py" in cmd[1]
+    assert "--domain" in cmd and "auto" in cmd
+
+
+def test_ledger_stats_parses_json():
+    import subprocess as _sp
+    payload = {"repo": ".", "runs": 0, "by_status": {},
+               "top_open_rules": []}
+    mock_result = _sp.CompletedProcess(args=[], returncode=0,
+                                       stdout=json.dumps(payload), stderr="")
+    with patch("mcp_server.subprocess.run", return_value=mock_result) as m:
+        result = mcp_server.ledger_stats(".")
+    assert result["runs"] == 0
+    assert result["returncode"] == 0
+    cmd = m.call_args.args[0]
+    assert "ledger.py" in cmd[1] and "stats" in cmd
+
+
+def test_validate_findings_report_returns_rc(tmp_path):
+    import subprocess as _sp
+    target = tmp_path / "findings.json"
+    target.write_text("[]", encoding="utf-8")
+    mock_result = _sp.CompletedProcess(args=[], returncode=1,
+                                       stdout="FAIL", stderr="")
+    with patch("mcp_server.subprocess.run", return_value=mock_result) as m:
+        result = mcp_server.validate_findings_report(str(target))
+    assert result["returncode"] == 1
+    assert result["stdout"] == "FAIL"
+    assert "validate_findings.py" in m.call_args.args[0][1]
+
+
+def test_validate_coverage_ledger_report_returns_rc(tmp_path):
+    import subprocess as _sp
+    target = tmp_path / "coverage-ledger.json"
+    target.write_text("{}", encoding="utf-8")
+    mock_result = _sp.CompletedProcess(args=[], returncode=0,
+                                       stdout="OK", stderr="")
+    with patch("mcp_server.subprocess.run", return_value=mock_result) as m:
+        result = mcp_server.validate_coverage_ledger_report(str(target))
+    assert result["returncode"] == 0
+    assert "validate_coverage_ledger.py" in m.call_args.args[0][1]
+
+
+def test_check_freshness_text_fallback():
+    import subprocess as _sp
+    mock_result = _sp.CompletedProcess(args=[], returncode=0,
+                                       stdout="controls=48061 families=336",
+                                       stderr="")
+    with patch("mcp_server.subprocess.run", return_value=mock_result) as m:
+        result = mcp_server.check_freshness()
+    assert result["returncode"] == 0
+    assert "controls=48061" in result["stdout"]
+    assert "--skip-kev" in m.call_args.args[0]
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

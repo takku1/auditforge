@@ -29,17 +29,19 @@ if ($leaks) { Write-Host "FAIL tracked clone/report paths:"; $leaks | ForEach-Ob
 $reqs = Get-Content (Join-Path $root 'requirements.txt') | ForEach-Object {
     ($_ -split '[<>=~]')[0].Trim().ToLower() } | Where-Object { $_ }
 # dist-name -> import-name aliases for packages whose module differs
-$aliases = @{ 'pyyaml' = 'yaml'; 'python-dotenv' = 'dotenv' }
+$aliases = @{ 'pyyaml' = 'yaml'; 'python-dotenv' = 'dotenv'; 
+             'sentence-transformers' = 'sentence_transformers'; 'sqlite-vec' = 'sqlite_vec' }
 $provided = $reqs | ForEach-Object { @($_, $aliases[$_]) | Where-Object { $_ } }
 $local = @(Get-ChildItem (Join-Path $root 'scripts') -Filter '*.py' |
         Select-Object -ExpandProperty BaseName) +
     @(Get-ChildItem (Join-Path $root 'scripts') -Directory |
         Select-Object -ExpandProperty Name)
 $stdlib = @('os','json','re','sys','subprocess','argparse','pathlib','typing','unittest',
-            'tempfile','shutil','datetime','urllib','contextlib','__future__','hashlib','sqlite3')
+            'tempfile','shutil','datetime','urllib','contextlib','__future__','hashlib','sqlite3','concurrent','threading','ssl','socket','ipaddress','fnmatch','csv','xml','zipfile','copy','html','io','time','stat','enum','dataclasses','functools','collections')
 $imports = Get-ChildItem (Join-Path $root 'scripts') -Filter '*.py' |
     Get-Content | ForEach-Object {
-        if ($_ -match '^\s*(?:import|from)\s+([a-zA-Z_][a-zA-Z0-9_]*)') { $Matches[1].ToLower() }
+        if ($_ -cmatch '^\s*import\s+([a-zA-Z_][a-zA-Z0-9_]*)') { $Matches[1].ToLower() }
+        elseif ($_ -cmatch '^\s*from\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s+import\b') { $Matches[1].Split('.')[0].ToLower() }
     } | Sort-Object -Unique
 foreach ($m in $imports) {
     if ($m -in $stdlib -or $m -in $local) { continue }

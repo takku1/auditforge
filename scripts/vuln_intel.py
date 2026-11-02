@@ -126,6 +126,34 @@ def check_kev(cve_id: str, conn: sqlite3.Connection | None = None) -> dict | Non
             conn.close()
 
 
+def kev_catalog_ids(conn: sqlite3.Connection | None = None) -> tuple[list[str], str | None]:
+    """Sorted KEV CVE IDs plus the catalog's fetched_at timestamp.
+
+    Refreshes the whole catalog (one HTTP call) when the cache is empty or
+    older than KEV_TTL; falls back to the stale cache when offline. Raises
+    RuntimeError only when offline with no cache at all. Used by
+    check_freshness.py's KEV-diff watch (newly exploited CVEs over time).
+    """
+    own = conn is None
+    conn = conn or _conn()
+    try:
+        row = conn.execute("SELECT payload, fetched_at FROM kev_catalog WHERE id = 1").fetchone()
+        if row is None or _stale(row[1], KEV_TTL):
+            try:
+                _refresh_kev(conn)
+                row = conn.execute("SELECT payload, fetched_at FROM kev_catalog WHERE id = 1").fetchone()
+            except Exception as exc:  # noqa: BLE001 - fall back to stale cache if offline
+                if row is None:
+                    raise RuntimeError(f"KEV fetch failed and no cache available: {exc}") from exc
+        catalog = json.loads(row[0])
+        ids = sorted({(v.get("cveID") or "").strip().upper()
+                      for v in catalog.get("vulnerabilities", []) if v.get("cveID")})
+        return ids, row[1]
+    finally:
+        if own:
+            conn.close()
+
+
 # --------------------------------------------------------------------------
 # FIRST.org EPSS
 # --------------------------------------------------------------------------

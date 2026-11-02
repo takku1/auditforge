@@ -96,6 +96,72 @@ network_targets: []
         self.assertEqual(auditor.findings, [])
         mock_run.assert_not_called()
 
+    @patch("auditor.scanners._tool_available", return_value=True)
+    @patch("subprocess.run")
+    def test_run_trivy_scans_configured_images(self, mock_run, mock_available):
+        # Trivy "images" config: one fs scan plus one image scan per entry.
+        from auditor import scanners
+
+        def _payload(target, cve, pkg):
+            m = MagicMock()
+            m.stdout = json.dumps({"Results": [{"Target": target,
+                "Vulnerabilities": [{
+                    "VulnerabilityID": cve, "PkgName": pkg,
+                    "InstalledVersion": "1.0", "FixedVersion": "1.1",
+                    "Severity": "HIGH", "PrimaryURL": "https://example.com"}]}]})
+            return m
+
+        mock_run.side_effect = [
+            _payload("requirements.txt", "CVE-2023-0001", "requests"),
+            _payload("myapp:1.0 (os-pkgs)", "CVE-2023-0002", "openssl"),
+        ]
+        findings = scanners.run_trivy(
+            self.root, {"enabled": True, "images": ["myapp:1.0"]}, {"mappings": {}})
+
+        self.assertEqual(len(findings), 2)
+        by_id = {f.rule_id: f for f in findings}
+        self.assertIn("myapp:1.0", by_id["CVE-2023-0002"].file)
+        self.assertEqual(by_id["CVE-2023-0002"].tool, "Trivy")
+        cmds = [c.args[0] for c in mock_run.call_args_list]
+        self.assertIn(["trivy", "fs", "--format", "json", self.root], cmds)
+        self.assertIn(["trivy", "image", "--format", "json", "myapp:1.0"], cmds)
+
+    @patch("auditor.scanners._tool_available", return_value=True)
+    @patch("subprocess.run")
+    def test_run_trivy_no_images_by_default(self, mock_run, mock_available):
+        # No "images" key: exactly one fs scan, no image subprocess calls.
+        from auditor import scanners
+
+        mock_result = MagicMock()
+        mock_result.stdout = json.dumps({"Results": []})
+        mock_run.return_value = mock_result
+        findings = scanners.run_trivy(self.root, {"enabled": True}, {"mappings": {}})
+
+        self.assertEqual(findings, [])
+        self.assertEqual(mock_run.call_count, 1)
+
+    @patch("auditor.scanners._tool_available", return_value=True)
+    @patch("subprocess.run")
+    def test_run_trivy_empty_fs_output_still_scans_images(self, mock_run, mock_available):
+        # Empty fs stdout must not skip configured image scans.
+        from auditor import scanners
+
+        empty = MagicMock()
+        empty.stdout = ""
+        img = MagicMock()
+        img.stdout = json.dumps({"Results": [{"Target": "img (os-pkgs)",
+            "Vulnerabilities": [{
+                "VulnerabilityID": "CVE-2023-0009", "PkgName": "zlib",
+                "InstalledVersion": "1.2", "FixedVersion": "1.3",
+                "Severity": "CRITICAL", "PrimaryURL": ""}]}]})
+        mock_run.side_effect = [empty, img]
+        findings = scanners.run_trivy(
+            self.root, {"enabled": True, "images": ["img"]}, {"mappings": {}})
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].rule_id, "CVE-2023-0009")
+        self.assertIn("img", findings[0].file)
+
     def test_engine_availability_reported(self):
         import auditor.scanners as scanners
         availability = scanners.engine_availability()
@@ -426,6 +492,9 @@ class _CloudPostureBase(unittest.TestCase):
         mapping_file = os.path.join(workspace_dir, "scripts", "framework_mappings.json").replace("\\", "/")
         metadata_file = os.path.join(workspace_dir, "scripts", "framework_metadata.json").replace("\\", "/")
         self.baseline = os.path.join(self.root, "cloud_baseline.json")
+        # Windows tmp paths carry backslashes, which are illegal in a
+        # double-quoted YAML scalar - same normalization as above.
+        self.baseline = self.baseline.replace("\\", "/")
         with open(self.config_path, "w", encoding="utf-8") as f:
             f.write(f"""
 settings:
@@ -589,6 +658,97 @@ class TestEmailAuth(_CloudPostureBase):
                 ["mail.example.org"], {}, selectors=["default"])
         self.assertEqual(findings, [])
 
+    def test_header_findings_full_good_headers_pass(self):
+        # Field report §4 row 20: the complete set of expected headers
+        # with strong values must stay silent.
+        from auditor import scanners as _sc
+        headers = {
+            "Strict-Transport-Security":
+                "max-age=63072000; includeSubDomains; preload",
+            "Content-Security-Policy":
+                "default-src 'self'; script-src 'self' 'sha256-abc'; "
+                "frame-ancestors 'none'; report-uri /csp",
+            "Permissions-Policy": "camera=()",
+            "Referrer-Policy": "no-referrer",
+            "Cross-Origin-Opener-Policy": "same-origin",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+        }
+        self.assertEqual(_sc._header_findings("https://shop.test/", headers, {}), [])
+
+    def test_header_findings_missing_optional_headers(self):
+        from auditor import scanners as _sc
+        headers = {
+            "Strict-Transport-Security":
+                "max-age=63072000; includeSubDomains; preload",
+            "Content-Security-Policy":
+                "default-src 'self'; report-uri /csp",
+        }
+        ids = {f.rule_id for f in _sc._header_findings(
+            "https://shop.test/", headers, {})}
+        self.assertEqual(ids, {"NET_PERMISSIONS_POLICY_MISSING",
+                               "NET_REFERRER_POLICY_MISSING",
+                               "NET_COOP_MISSING",
+                               "NET_XCTO_MISSING",
+                               "NET_FRAME_ANCESTORS_MISSING"})
+
+    def test_header_findings_weak_hsts_value(self):
+        # Field report §4 row 21, DAST side.
+        from auditor import scanners as _sc
+        headers = {"Strict-Transport-Security": "max-age=86400",
+                   "Content-Security-Policy": "default-src 'self'"}
+        ids = {f.rule_id for f in _sc._header_findings(
+            "https://shop.test/", headers, {})}
+        self.assertIn("NET_HSTS_WEAK", ids)
+        self.assertNotIn("NET_HSTS_MISSING", ids)
+
+    def test_header_findings_weak_csp_value(self):
+        # Field report §4 rows 15-16, DAST side.
+        from auditor import scanners as _sc
+        headers = {
+            "Strict-Transport-Security":
+                "max-age=63072000; includeSubDomains; preload",
+            "Content-Security-Policy":
+                "default-src 'self'; script-src 'self' 'unsafe-inline'",
+        }
+        ids = {f.rule_id for f in _sc._header_findings(
+            "https://shop.test/", headers, {})}
+        self.assertIn("NET_CSP_WEAK", ids)
+        self.assertIn("NET_CSP_NO_REPORT", ids)
+        self.assertNotIn("NET_CSP_MISSING", ids)
+
+    def test_dkim_new_provider_selectors(self):
+        # Field report §3.11: resend/s1/s2/mandrill/pm/amazonses/mxvault.
+        from auditor import scanners as _sc
+        routes = {"resend._domainkey.acmewidgets.io":
+                  ["v=DKIM1; k=rsa; p=MOCKKEY"]}
+        with patch("urllib.request.urlopen",
+                   side_effect=_doh_urlopen_mock(routes)):
+            findings = _sc.run_email_auth_audit(
+                ["acmewidgets.io"], {"mappings": {}})
+        ids = {f.rule_id for f in findings}
+        self.assertNotIn("EMAIL_DKIM_MISSING", ids)
+        self.assertIn("EMAIL_DMARC_MISSING", ids)
+
+    def test_frame_ancestors_from_report_only_csp(self):
+        # Field report §4 row 19, DAST side: a report-only CSP carrying
+        # frame-ancestors still counts as clickjacking protection.
+        from auditor import scanners as _sc
+        headers = {
+            "Strict-Transport-Security":
+                "max-age=63072000; includeSubDomains; preload",
+            "Content-Security-Policy": "default-src 'self'; report-uri /csp",
+            "Content-Security-Policy-Report-Only":
+                "default-src 'self'; frame-ancestors 'none'",
+            "Permissions-Policy": "camera=()",
+            "Referrer-Policy": "no-referrer",
+            "Cross-Origin-Opener-Policy": "same-origin",
+            "X-Content-Type-Options": "nosniff",
+        }
+        ids = {f.rule_id for f in _sc._header_findings(
+            "https://shop.test/", headers, {})}
+        self.assertNotIn("NET_FRAME_ANCESTORS_MISSING", ids)
+
     def test_placeholders_and_reserved_hosts_skipped(self):
         import auditor.scanners as scanners  # noqa: E402
 
@@ -606,6 +766,37 @@ class TestEmailAuth(_CloudPostureBase):
         with patch("urllib.request.urlopen", side_effect=_doh_urlopen_mock({})):
             auditor.run_email_audit()
         self.assertTrue(any(f.rule_id == "EMAIL_DMARC_MISSING" for f in auditor.findings))
+
+    def test_email_domains_override_config(self):
+        # Field report §3.4: --email-domains lets a local DAST run check
+        # the production domain even when DAST targets are localhost.
+        auditor = self._auditor()
+        auditor.config["email_auth"] = {"enabled": True, "domains": [],
+                                        "selectors": ["default"], "timeout": 5}
+        with patch("urllib.request.urlopen",
+                   side_effect=_doh_urlopen_mock({})):
+            auditor.run_email_audit(
+                override_domains=["acmewidgets.io"])
+        self.assertTrue(any(f.rule_id == "EMAIL_DMARC_MISSING"
+                            for f in auditor.findings))
+
+    def test_email_domains_threaded_through_run_all(self):
+        # _run_engine_isolated re-reads config from disk, so the
+        # email_auth block must be in the file, not just in memory.
+        with open(self.config_path, "a", encoding="utf-8") as f:
+            f.write("email_auth:\n  enabled: true\n  domains: []\n")
+        from auditor import scanners as _sc
+        auditor = self._auditor()
+        seen = {}
+
+        def spy(domains, mapping_data, selectors=None, timeout=10):
+            seen["domains"] = list(domains)
+            return []
+
+        with patch.object(_sc, "run_email_auth_audit", side_effect=spy):
+            auditor.run_all(engines=["email"], parallel=False,
+                            email_domains=["acmewidgets.io"])
+        self.assertEqual(seen.get("domains"), ["acmewidgets.io"])
 
     def test_email_checks_run_in_network_audit_path(self):
         # R-055: enabled email_auth extends run_network_audit for target domains.
@@ -728,6 +919,110 @@ class TestSBOM(_CloudPostureBase):
         # allowlisted/declared-MIT project license itself is never flagged
         self.assertFalse(any("demo" in f.file and "package.json" not in f.file
                              for f in copyleft))
+
+    def test_package_lock_wins_over_manifest_ranges(self):
+        # Field report §3.5: a lockfile pins exact resolved versions; the
+        # manifest only has ranges ("fake" versions). Lock wins.
+        from auditor import scanners as _sc
+        with open(os.path.join(self.root, "package.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"name": "demo", "dependencies": {"leftpad": "^9.9.9"},
+                       "devDependencies": {"eslint": "~2.0.0"}}, f)
+        lock = {"name": "demo", "lockfileVersion": 3,
+                "packages": {
+                    "": {"dependencies": {"leftpad": "1.3.0"},
+                          "devDependencies": {"eslint": "2.0.0"}},
+                    "node_modules/leftpad": {"version": "1.3.0"},
+                    "node_modules/eslint": {"version": "2.0.0", "dev": True}}}
+        with open(os.path.join(self.root, "package-lock.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(lock, f)
+        pkgs = {p[0]: (p[1], p[2]) for p in _sc._parse_package_lock(
+            os.path.join(self.root, "package-lock.json"))}
+        self.assertEqual(pkgs["leftpad"], ("1.3.0", "prod"))
+        self.assertEqual(pkgs["eslint"], ("2.0.0", "dev"))
+
+        auditor = self._auditor()
+        auditor.config["sbom"] = {"enabled": True, "format": "cyclonedx",
+                                  "output": os.path.join(self.root, "sb.json")}
+        auditor.config["licenses"] = {"allowlist": ["MIT"]}
+        auditor.run_sbom_audit()
+        doc = json.load(open(os.path.join(self.root, "sb.json"),
+                             encoding="utf-8"))
+        by_name = {c["name"]: c for c in doc["components"]}
+        self.assertEqual(by_name["leftpad"]["version"], "1.3.0")
+        self.assertNotIn("9.9.9", json.dumps(doc))
+
+    def test_yarn_lock_classic_parsed(self):
+        from auditor import scanners as _sc
+        with open(os.path.join(self.root, "yarn.lock"), "w",
+                  encoding="utf-8") as f:
+            f.write('# yarn lockfile v1\n\n'
+                    '"leftpad@^1.3.0":\n'
+                    '  version "1.3.0"\n'
+                    '  resolved "https://registry.yarnpkg.com/leftpad.tgz"\n')
+        pkgs = _sc._parse_yarn_lock(os.path.join(self.root, "yarn.lock"))
+        self.assertEqual(pkgs, [("leftpad", "1.3.0", "unknown")])
+
+    def test_pnpm_lock_scopes(self):
+        from auditor import scanners as _sc
+        with open(os.path.join(self.root, "pnpm-lock.yaml"), "w",
+                  encoding="utf-8") as f:
+            f.write("lockfileVersion: '9.0'\n"
+                    "importers:\n"
+                    "  .:\n"
+                    "    dependencies:\n"
+                    "      leftpad:\n"
+                    "        specifier: ^1.3.0\n"
+                    "        version: 1.3.0\n"
+                    "    devDependencies:\n"
+                    "      eslint:\n"
+                    "        specifier: ~2.0.0\n"
+                    "        version: 2.0.0\n"
+                    "packages:\n"
+                    "  /leftpad@1.3.0:\n"
+                    "    resolution: {integrity: sha512-x}\n"
+                    "  /eslint@2.0.0:\n"
+                    "    resolution: {integrity: sha512-y}\n")
+        pkgs = {p[0]: (p[1], p[2]) for p in _sc._parse_pnpm_lock(
+            os.path.join(self.root, "pnpm-lock.yaml"))}
+        self.assertEqual(pkgs["leftpad"], ("1.3.0", "prod"))
+        self.assertEqual(pkgs["eslint"], ("2.0.0", "dev"))
+
+    def test_manifest_only_warns_ranges_not_resolved(self):
+        import io
+        from contextlib import redirect_stderr
+        self._write_manifests()
+        auditor = self._auditor()
+        auditor.config["sbom"] = {"enabled": True, "format": "cyclonedx",
+                                  "output": os.path.join(self.root, "sb.json")}
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            auditor.run_sbom_audit()
+        self.assertIn("ranges, not resolved", buf.getvalue())
+
+    def test_sbom_default_output_under_target_reports(self):
+        self._write_manifests()
+        auditor = self._auditor()
+        auditor.config["sbom"] = {"enabled": True, "format": "cyclonedx"}
+        auditor.config["licenses"] = {"allowlist": ["MIT"]}
+        auditor.run_sbom_audit()
+        default = os.path.join(self.root, "reports", "sbom.cyclonedx.json")
+        self.assertTrue(os.path.isfile(default), default)
+
+    def test_sbom_dev_dependency_marked_optional(self):
+        with open(os.path.join(self.root, "package.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"name": "demo",
+                       "devDependencies": {"mocha": "^10.0.0"}}, f)
+        auditor = self._auditor()
+        out = os.path.join(self.root, "sb.json")
+        auditor.config["sbom"] = {"enabled": True, "format": "cyclonedx",
+                                  "output": out}
+        auditor.run_sbom_audit()
+        doc = json.load(open(out, encoding="utf-8"))
+        by_name = {c["name"]: c for c in doc["components"]}
+        self.assertEqual(by_name["mocha"].get("scope"), "optional")
 
     def test_sbom_spdx_format(self):
         self._write_manifests()
@@ -998,6 +1293,181 @@ class TestScorecard(_ExtScannerBase):
         self.assertEqual(auditor.findings, [])
         mock_run.assert_not_called()
 
+
+
+    def test_engine_timeout_default_and_override(self):
+        from auditor import scanners
+        self.assertEqual(scanners._engine_timeout({}), 600)
+        self.assertEqual(scanners._engine_timeout(None), 600)
+        self.assertEqual(scanners._engine_timeout({"timeout": 30}), 30)
+        self.assertEqual(scanners._engine_timeout({"timeout": "bad"}), 600)
+
+    @patch("auditor.scanners._tool_available", return_value=True)
+    @patch("subprocess.run")
+    def test_hung_binary_becomes_skip_not_hang(self, mock_run, mock_available):
+        import subprocess
+        from auditor import scanners
+        mock_run.side_effect = subprocess.TimeoutExpired("trivy", 600)
+        findings = scanners.run_trivy(self.root, {"enabled": True}, {"mappings": {}})
+        self.assertEqual(findings, [])
+        _, kwargs = mock_run.call_args
+        self.assertEqual(kwargs.get("timeout"), 600)
+
+    @patch("auditor.scanners._tool_available", return_value=True)
+    @patch("subprocess.run")
+    def test_per_tool_timeout_override_reaches_binary(self, mock_run, mock_available):
+        from auditor import scanners
+        mock_result = MagicMock()
+        mock_result.stdout = ""
+        mock_run.return_value = mock_result
+        scanners.run_trivy(self.root, {"enabled": True, "timeout": 42},
+                           {"mappings": {}})
+        _, kwargs = mock_run.call_args
+        self.assertEqual(kwargs.get("timeout"), 42)
+
+
+    def test_run_all_unknown_engine_rejected(self):
+        auditor = self._auditor()
+        with self.assertRaises(ValueError):
+            auditor.run_all(engines=["nope"])
+
+    def test_run_all_caches_deterministic_engine(self):
+        from auditor.models import UnifiedFinding
+        from auditor import scanners as _sc
+        finding = UnifiedFinding(tool="Trivy", rule_id="CVE-2024-0001",
+                                 name="Vuln", severity="HIGH",
+                                 file="requirements.txt", line=0,
+                                 snippet="pkg 1.0")
+        with patch.object(_sc, "run_trivy", return_value=[finding]) as m, \
+                patch("auditor.scanners._tool_available", return_value=True):
+            first = self._auditor()
+            first.run_all(engines=["trivy"], parallel=False)
+            self.assertEqual(len(first.findings), 1)
+            self.assertEqual(m.call_count, 1)
+            second = self._auditor()
+            second.run_all(engines=["trivy"], parallel=False)
+            self.assertEqual(len(second.findings), 1)
+            self.assertEqual(second.findings[0].rule_id, "CVE-2024-0001")
+            self.assertEqual(m.call_count, 1)  # cache hit: no re-run
+
+    def test_run_all_runs_engines_in_parallel(self):
+        from auditor.models import UnifiedFinding
+        from auditor import scanners as _sc
+        f1 = UnifiedFinding(tool="A", rule_id="R1", name="n", severity="LOW",
+                            file="f", line=1, snippet="s")
+        f2 = UnifiedFinding(tool="B", rule_id="R2", name="n", severity="LOW",
+                            file="f", line=1, snippet="s")
+        with patch.object(_sc, "run_trivy", return_value=[f1]), \
+                patch.object(_sc, "run_semgrep", return_value=[f2]), \
+                patch("auditor.scanners._tool_available", return_value=True):
+            auditor = self._auditor()
+            auditor.run_all(engines=["trivy", "semgrep"], parallel=True)
+            self.assertEqual({f.rule_id for f in auditor.findings}, {"R1", "R2"})
+
+    def test_run_all_isolates_engine_failure(self):
+        from auditor import scanners as _sc
+        with patch.object(_sc, "run_trivy", side_effect=RuntimeError("boom")), \
+                patch("auditor.scanners._tool_available", return_value=True):
+            auditor = self._auditor()
+            auditor.run_all(engines=["trivy"], parallel=False)
+            self.assertEqual(auditor.findings, [])
+            self.assertEqual(len(auditor.engine_errors), 1)
+            self.assertEqual(auditor.engine_errors[0]["engine"], "trivy")
+            self.assertEqual(auditor.run_status()["run_status"], "partial")
+
+    def test_universal_sarif_and_run_status(self):
+        from auditor import reporting
+        from auditor.models import UnifiedFinding
+        f1 = UnifiedFinding(tool="Semgrep", rule_id="R1", name="XSS",
+                            severity="HIGH", file="a.js", line=3, snippet="s",
+                            frameworks=["ASVS:V1.2.1"], remediation="fix it")
+        f2 = UnifiedFinding(tool="Semgrep", rule_id="R1", name="XSS",
+                            severity="LOW", file="b.js", line=0, snippet="s2")
+        payload = json.loads(reporting.to_universal_sarif([f1, f2], {"total": 2}))
+        self.assertEqual(payload["version"], "2.1.0")
+        self.assertEqual(len(payload["runs"][0]["tool"]["driver"]["rules"]), 1)
+        self.assertEqual(len(payload["runs"][0]["results"]), 2)
+        levels = [r["level"] for r in payload["runs"][0]["results"]]
+        self.assertEqual(levels, ["error", "note"])
+        region = payload["runs"][0]["results"][1]["locations"][0] \
+            ["physicalLocation"]["region"]
+        self.assertEqual(region["startLine"], 1)
+        out = json.loads(reporting.to_universal_json(
+            [f1], {"total": 1}, {"semgrep": True},
+            engine_errors=[{"engine": "x", "error": "y"}],
+            run_status="partial", run_status_reason="x"))
+        self.assertEqual(out["run_status"], "partial")
+        self.assertEqual(len(out["engine_errors"]), 1)
+
+
+    def _fake_tls_sock(self, version="TLSv1.3",
+                         cipher="ECDHE-RSA-AES128-GCM-SHA256",
+                         not_after="Jan  1 00:00:00 2030 GMT",
+                         host="db.internal"):
+        sock = MagicMock()
+        sock.version.return_value = version
+        sock.cipher.return_value = (cipher, "TLSv1.3", 128)
+        sock.getpeercert.return_value = {
+            "subject": ((("commonName", host),),), "notAfter": not_after}
+        sock.__enter__.return_value = sock
+        return sock
+
+    def _run_tls(self, targets, sock):
+        from auditor import scanners as _sc
+        ctx = MagicMock()
+        ctx.wrap_socket.return_value.__enter__.return_value = sock
+        raw = MagicMock()
+        raw.__enter__.return_value = raw
+        with patch.object(_sc.socket, "create_connection",
+                          return_value=raw) as conn, \
+                patch.object(_sc.ssl, "create_default_context",
+                             return_value=ctx):
+            out = _sc.run_tls_audit(targets, {"mappings": {}}, {"enabled": True})
+        return out, conn
+
+    def test_tls_legacy_version_flagged(self):
+        out, _ = self._run_tls(["https://db.internal:443"],
+                               self._fake_tls_sock(version="TLSv1.1"))
+        self.assertEqual([f.rule_id for f in out], ["TLS_WEAK_VERSION"])
+        self.assertEqual(out[0].severity, "HIGH")
+
+    def test_tls_weak_cipher_flagged(self):
+        out, _ = self._run_tls(["db.internal"],
+                               self._fake_tls_sock(cipher="RC4-SHA"))
+        self.assertEqual([f.rule_id for f in out], ["TLS_WEAK_CIPHER"])
+
+    def test_tls_expired_cert_critical(self):
+        out, _ = self._run_tls(
+            ["db.internal"],
+            self._fake_tls_sock(not_after="Jan  1 00:00:00 2020 GMT"))
+        self.assertEqual([f.rule_id for f in out], ["TLS_CERT_EXPIRED"])
+        self.assertEqual(out[0].severity, "CRITICAL")
+
+    def test_tls_hostname_mismatch(self):
+        out, _ = self._run_tls(["other.internal"],
+                               self._fake_tls_sock(host="db.internal"))
+        self.assertEqual([f.rule_id for f in out],
+                         ["TLS_CERT_HOSTNAME_MISMATCH"])
+
+    def test_tls_healthy_host_clean(self):
+        out, conn = self._run_tls(["https://db.internal"],
+                                  self._fake_tls_sock())
+        self.assertEqual(out, [])
+        self.assertEqual(conn.call_count, 1)
+
+    def test_tls_placeholders_never_dialed(self):
+        from auditor import scanners as _sc
+        with patch.object(_sc.socket, "create_connection") as conn:
+            out = _sc.run_tls_audit(["https://example.com",
+                                     "https://api.example.com/health"],
+                                    {"mappings": {}}, {"enabled": True})
+        self.assertEqual(out, [])
+        conn.assert_not_called()
+
+    def test_orchestrator_tls_uses_placeholders_safely(self):
+        auditor = self._auditor()  # default config: placeholder targets
+        auditor.run_tls_audit()
+        self.assertEqual(auditor.findings, [])
 
 
 if __name__ == "__main__":

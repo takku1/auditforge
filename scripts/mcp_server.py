@@ -441,6 +441,205 @@ def run_audit(path: str, fail_on: str | None = None, min_severity: str | None = 
 
 
 @server.tool()
+def run_universal_audit(path: str, engines: list | None = None,
+                        timeout_s: int = 600, no_cache: bool = False) -> dict:
+    """Runs the full multi-engine pipeline (Checkov, Semgrep, Trivy, OSV,
+    cargo-audit, Nuclei, Scorecard, TruffleHog, SBOM, DAST, email auth,
+    cloud posture) against a directory and returns the unified JSON report:
+    normalized findings with cross-framework controls, engine availability,
+    engine errors, and an honest run_status (complete/partial + reason).
+    `path` is relative to the AuditForge repo root or absolute. `engines`
+    optionally subsets the pipeline (e.g. ["semgrep","osv","trivy"] for a
+    fast SAST+SCA pass); missing binaries skip gracefully and are reported
+    under engine_availability rather than failing the run."""
+    target = (ROOT / path) if not os.path.isabs(path) else Path(path)
+    cmd = [sys.executable, str(ROOT / "scripts" / "universal_audit.py"),
+           str(target), "--format", "json"]
+    if engines:
+        cmd += ["--engines", ",".join(engines)]
+    if no_cache:
+        cmd += ["--no-cache"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                cwd=str(ROOT), timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        return {"error": f"universal audit timed out after {timeout_s}s",
+                "engines": engines or "all"}
+    if len(result.stdout) > 10 * 1024 * 1024:
+        return {"error": "universal audit output exceeded 10 MiB cap",
+                "stderr": result.stderr[-2000:], "returncode": result.returncode}
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"error": "non-JSON output from universal_audit.py",
+                "stdout": result.stdout[-4000:],
+                "stderr": result.stderr[-2000:], "returncode": result.returncode}
+    payload["returncode"] = result.returncode
+    return payload
+
+
+@server.tool()
+def engine_status() -> dict:
+    """Which external scanner binaries are on PATH right now (Checkov,
+    Semgrep, Trivy, cargo-audit, Nuclei, Scorecard, TruffleHog). A missing
+    tool means its engines skip gracefully - reported here and in every
+    universal report's engine_availability, never a silent zero-findings
+    claim. Install hints live in config/compliance_config.yaml."""
+    from auditor import scanners
+    return {"engines": scanners.engine_availability()}
+
+
+
+@server.tool()
+def audit_policy_docs(path: str, top_k: int = 2) -> dict:
+    """Audits which governance/policy documents a repo actually has.
+    Checks the 15-policy required catalog (access control, incident
+    response, encryption, logging, change/vendor/risk management, ...)
+    against the target\'s docs by filename and content keywords, with
+    live NIST 800-53 / CSF / SOC2-TSC citations per policy. Returns
+    present/partial/missing-must/should-consider per policy plus an
+    unresolved_refs list. `path` is relative to the AuditForge repo
+    root or absolute. Point it at the org\'s policy folder for a clean
+    signal, or a whole repo for a corpus-wide sweep."""
+    target = (ROOT / path) if not os.path.isabs(path) else Path(path)
+    cmd = [sys.executable, str(ROOT / "scripts" / "policy_audit.py"),
+           str(target), "--top-k", str(top_k)]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                cwd=str(ROOT), timeout=300)
+    except subprocess.TimeoutExpired:
+        return {"error": "policy audit timed out after 300s"}
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"error": "non-JSON output from policy_audit.py",
+                "stdout": result.stdout[-4000:],
+                "stderr": result.stderr[-2000:],
+                "returncode": result.returncode}
+    payload["returncode"] = result.returncode
+    return payload
+
+
+@server.tool()
+def run_gap_analysis(path: str, domain: str = "auto",
+                     top_k: int = 2) -> dict:
+    """Diffs what a codebase SHOULD have against what it has: 12 domain
+    profiles (website, api-service, mcp-server, llm-app, cli-tool,
+    library-sdk, iac-cloud, kubernetes, ci-pipeline, mobile-app,
+    desktop-app, data-pipeline) with must-build gaps, present
+    capabilities, and live framework citations. `domain="auto"` picks
+    the best-fitting profile. `path` is relative to the AuditForge
+    repo root or absolute."""
+    target = (ROOT / path) if not os.path.isabs(path) else Path(path)
+    cmd = [sys.executable, str(ROOT / "scripts" / "gap_analysis.py"),
+           str(target), "--domain", domain, "--top-k", str(top_k)]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                cwd=str(ROOT), timeout=300)
+    except subprocess.TimeoutExpired:
+        return {"error": "gap analysis timed out after 300s"}
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"error": "non-JSON output from gap_analysis.py",
+                "stdout": result.stdout[-4000:],
+                "stderr": result.stderr[-2000:],
+                "returncode": result.returncode}
+    payload["returncode"] = result.returncode
+    return payload
+
+
+@server.tool()
+def ledger_stats(repo: str = ".") -> dict:
+    """Finding-lifecycle ledger summary for a repo: recorded runs,
+    findings by status, and top open rules. Read-only (stats never
+    mutates the ledger). `repo` is relative to the AuditForge root or
+    absolute; the ledger DB stays next to the scanned repo."""
+    target = (ROOT / repo) if not os.path.isabs(repo) else Path(repo)
+    cmd = [sys.executable, str(ROOT / "scripts" / "ledger.py"),
+           "stats", "--repo", str(target)]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                cwd=str(ROOT), timeout=120)
+    except subprocess.TimeoutExpired:
+        return {"error": "ledger stats timed out after 120s"}
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"error": "non-JSON output from ledger.py",
+                "stdout": result.stdout[-4000:],
+                "stderr": result.stderr[-2000:],
+                "returncode": result.returncode}
+    payload["returncode"] = result.returncode
+    return payload
+
+
+@server.tool()
+def validate_findings_report(path: str) -> dict:
+    """Validates a findings JSON file against report-schema.json
+    (required fields, severity vocabulary, control-ref shape). Returns
+    the validator\'s returncode plus its stdout/stderr - returncode 0
+    means the file is schema-clean. `path` is relative to the
+    AuditForge repo root or absolute."""
+    target = (ROOT / path) if not os.path.isabs(path) else Path(path)
+    cmd = [sys.executable, str(ROOT / "scripts" / "validate_findings.py"),
+           str(target)]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                cwd=str(ROOT), timeout=120)
+    except subprocess.TimeoutExpired:
+        return {"error": "validate_findings timed out after 120s"}
+    return {"returncode": result.returncode,
+            "stdout": result.stdout[-4000:],
+            "stderr": result.stderr[-2000:]}
+
+
+@server.tool()
+def validate_coverage_ledger_report(path: str) -> dict:
+    """Validates a coverage-ledger JSON file (every claimed control
+    maps to a real framework control, no orphan entries). Returns the
+    validator\'s returncode plus its stdout/stderr - returncode 0 means
+    clean. `path` is relative to the AuditForge repo root or absolute."""
+    target = (ROOT / path) if not os.path.isabs(path) else Path(path)
+    cmd = [sys.executable,
+           str(ROOT / "scripts" / "validate_coverage_ledger.py"),
+           str(target)]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                cwd=str(ROOT), timeout=120)
+    except subprocess.TimeoutExpired:
+        return {"error": "validate_coverage_ledger timed out after 120s"}
+    return {"returncode": result.returncode,
+            "stdout": result.stdout[-4000:],
+            "stderr": result.stderr[-2000:]}
+
+
+@server.tool()
+def check_freshness(skip_kev: bool = True) -> dict:
+    """Diffs the live knowledge stack (framework metadata counts, KEV
+    catalog, OSV reachability) against scripts/freshness_manifest.json.
+    Read-only - it never rewrites the baseline (refresh via
+    `python scripts/check_freshness.py --write` on the shell).
+    `skip_kev` avoids the CISA network fetch for offline runs."""
+    cmd = [sys.executable, str(ROOT / "scripts" / "check_freshness.py")]
+    if skip_kev:
+        cmd += ["--skip-kev"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                cwd=str(ROOT), timeout=300)
+    except subprocess.TimeoutExpired:
+        return {"error": "freshness check timed out after 300s"}
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"returncode": result.returncode,
+                "stdout": result.stdout[-4000:],
+                "stderr": result.stderr[-2000:]}
+    payload["returncode"] = result.returncode
+    return payload
+
+
+@server.tool()
 def kev_lookup(cve_id: str) -> dict:
     """Checks CISA's Known Exploited Vulnerabilities (KEV) catalog for one
     CVE - free, no API key. Returns whether it's confirmed actively

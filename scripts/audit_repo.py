@@ -26,6 +26,7 @@ def load_repo_config(directory: str) -> dict:
         exclude: ["generated/*", ...]
         min_severity: MEDIUM
         disable_rules: ["SDLC004", ...]
+        pii_allow: ["*@example.com", ...]   # public contacts, not leaks
     """
     path = os.path.join(directory, CONFIG_FILENAME)
     if not os.path.isfile(path):
@@ -104,10 +105,12 @@ def main(argv=None) -> int:
                      f"(must be one of {SEVERITIES})")
     excludes = list(args.exclude) + list(repo_config.get("exclude") or [])
     disabled_rules = set(repo_config.get("disable_rules") or [])
+    pii_allow = list(repo_config.get("pii_allow") or [])
 
     report = audit_directory(args.directory, excludes=excludes,
                              min_severity=min_severity, history=args.history,
-                             disabled_rules=disabled_rules)
+                             disabled_rules=disabled_rules,
+                             pii_allow=pii_allow)
 
     if args.update_baseline:
         write_baseline(args.update_baseline, report)

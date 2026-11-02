@@ -75,6 +75,18 @@ def print_text(report: dict, use_color: bool):
           f"Medium: {s['MEDIUM']} | Low: {s['LOW']})")
 
 
+def _native_run_status(report: dict) -> tuple:
+    """Honest run state: skipped (oversized/binary/unreadable) files mean
+    parts of the target were never looked at, so the run is partial with
+    the reason naming what was skipped - never a silent clean bill."""
+    skipped = report.get("skipped", {}) or {}
+    nonzero = {k: v for k, v in skipped.items() if v}
+    if nonzero:
+        detail = ", ".join(f"{k}={v}" for k, v in sorted(nonzero.items()))
+        return ("partial", f"skipped files ({detail}) were not scanned")
+    return ("complete", "")
+
+
 def to_json(report: dict) -> str:
     out = dict(report)
     findings = []
@@ -83,6 +95,9 @@ def to_json(report: dict) -> str:
         d["soc2_controls"] = rule_frameworks(f.rule)
         findings.append(d)
     out["findings"] = findings
+    status, reason = _native_run_status(report)
+    out["run_status"] = status
+    out["run_status_reason"] = reason
     return json.dumps(out, indent=2)
 
 
@@ -218,9 +233,72 @@ def to_universal_markdown(findings: list, mapping_data: dict, metadata_data: dic
     return "\n".join(lines)
 
 
-def to_universal_json(findings: list, summary: dict, availability: Optional[dict] = None) -> str:
+def to_universal_json(findings: list, summary: dict, availability: Optional[dict] = None,
+                      engine_errors: Optional[list] = None,
+                      run_status: str = "complete",
+                      run_status_reason: str = "") -> str:
     return json.dumps({
         "summary": summary,
         "engine_availability": availability or {},
+        "engine_errors": engine_errors or [],
+        "run_status": run_status,
+        "run_status_reason": run_status_reason,
         "findings": [f.__dict__ for f in findings],
+    }, indent=2)
+
+_UNIVERSAL_SARIF_LEVEL = {"CRITICAL": "error", "ERROR": "error",
+                          "HIGH": "error", "MEDIUM": "warning",
+                          "WARNING": "warning", "LOW": "note", "INFO": "note"}
+
+
+def to_universal_sarif(findings: list, summary: dict) -> str:
+    """One SARIF 2.1.0 log across all engines (ToB merge_sarif.py precedent):
+    rules deduplicated by rule_id, severities mapped to SARIF levels, engine
+    name + crosswalked frameworks preserved per result."""
+    rules = {}
+    results = []
+    for f in findings:
+        rule_id = str(getattr(f, "rule_id", "UNKNOWN"))
+        if rule_id not in rules:
+            rules[rule_id] = {
+                "id": rule_id,
+                "name": str(getattr(f, "name", rule_id))[:120],
+                "shortDescription": {"text": str(getattr(f, "name", rule_id))[:300]},
+                "help": {"text": str(getattr(f, "remediation", ""))[:1000]},
+                "properties": {"tool": str(getattr(f, "tool", ""))},
+            }
+        try:
+            line = int(getattr(f, "line", 0) or 0)
+        except (ValueError, TypeError):
+            line = 0
+        results.append({
+            "ruleId": rule_id,
+            "level": _UNIVERSAL_SARIF_LEVEL.get(
+                str(getattr(f, "severity", "")).upper(), "note"),
+            "message": {"text": str(getattr(f, "name", ""))[:500]},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": str(getattr(f, "file", ""))},
+                    "region": {"startLine": max(1, line)},
+                }
+            }],
+            "properties": {
+                "tool": str(getattr(f, "tool", "")),
+                "severity": str(getattr(f, "severity", "")),
+                "frameworks": list(getattr(f, "frameworks", []) or []),
+            },
+        })
+    return json.dumps({
+        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/"
+                   "master/Schemata/sarif-schema-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {
+                "name": "auditforge-universal",
+                "informationUri": "https://github.com/local/auditforge",
+                "rules": sorted(rules.values(), key=lambda r: r["id"]),
+            }},
+            "results": results,
+            "properties": {"summary": summary},
+        }],
     }, indent=2)

@@ -1,0 +1,142 @@
+{
+  "_comment": "Domain profiles for scripts/gap_analysis.py. Each capability names the framework families + keywords used to pull live citations from framework_metadata.json (families that do not resolve are reported, never silently dropped), file globs that count as repo evidence, and native rule IDs whose firing means the risk was observed. must=true + no evidence = must-build gap. Web is one profile among all - no domain is the template.",
+  "website": {
+    "label": "Public website / web app",
+    "capabilities": [
+      {"id": "headers-config", "title": "Security-headers config shipped", "must": true, "families": ["ASVS", "CSF2"], "keywords": ["security header", "strict-transport", "content-security"], "files_any": ["_headers", "vercel.json", "netlify.toml", "next.config.*", "nginx.conf", "Caddyfile"], "rules_any": ["WEB001", "NET_HSTS_MISSING", "NET_CSP_MISSING"]},
+      {"id": "csp-enforced", "title": "Content-Security-Policy enforced (not report-only)", "must": true, "families": ["ASVS"], "keywords": ["content-security"], "files_any": ["_headers", "vercel.json", "netlify.toml"], "rules_any": ["WEB002", "NET_CSP_MISSING"]},
+      {"id": "tls-hsts", "title": "TLS with HSTS enforced", "must": true, "families": ["ASVS", "NIST53"], "keywords": ["strict-transport", "hsts", "transport"], "files_any": ["_headers", "vercel.json", "netlify.toml", "nginx.conf", "Caddyfile"], "rules_any": ["NET001", "NET004", "NET_HSTS_MISSING"]},
+      {"id": "origin-checks", "title": "State-changing endpoints verify origin/CSRF", "must": true, "families": ["ASVS"], "keywords": ["cross-origin", "samesite", "anti-automation"], "files_any": ["middleware.*", "csrf*", "*csrf*"], "rules_any": ["WEB005"]},
+      {"id": "rate-limiting", "title": "Per-endpoint rate limiting", "must": true, "families": ["ASVS"], "keywords": ["rate limit", "anti-automation", "excessive"], "files_any": ["*ratelimit*", "*rate-limit*", "middleware.*"], "rules_any": ["WEB004"]},
+      {"id": "authn-session", "title": "Authentication and session handling (if accounts exist)", "must": false, "families": ["ASVS", "NIST53"], "keywords": ["authentication", "session terminat", "credential"], "files_any": ["*auth*", "*login*", "*session*", "middleware.*"], "rules_any": []},
+      {"id": "output-encoding", "title": "Output encoding at sinks (no raw innerHTML)", "must": true, "families": ["ASVS"], "keywords": ["output encoding", "cross-site script"], "files_any": [], "rules_any": ["WEB003", "SDLC001"]},
+      {"id": "secret-management", "title": "No hardcoded secrets; env/secret manager", "must": true, "families": ["ASVS"], "keywords": ["secret assets", "secrets management"], "files_any": [".env.example", "wrangler.toml", ".env*"], "rules_any": ["SEC001", "SEC002", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008", "SEC009", "TRUFFLEHOG_VERIFIED_SECRET"]},
+      {"id": "security-logging", "title": "Security event logging (no PII in logs)", "must": true, "families": ["ASVS"], "keywords": ["logging", "sensitive data"], "files_any": ["*log*", "middleware.*"], "rules_any": ["LOG001", "PII001"]},
+      {"id": "dependency-scanning", "title": "Dependency scanning in CI", "must": true, "families": ["CSF2", "NIST53"], "keywords": ["vulnerabilit", "supply chain", "component"], "files_any": ["package.json", "package-lock.json", "pnpm-lock.yaml", ".github/workflows/*", ".gitlab-ci.yml"], "rules_any": ["DEP_VULN"]},
+      {"id": "error-handling", "title": "Safe error handling (no stack leaks)", "must": false, "families": ["ASVS"], "keywords": ["error handling", "stack trace"], "files_any": ["middleware.*", "*error*"], "rules_any": []}
+    ]
+  },
+  "api-service": {
+    "label": "HTTP API / backend service",
+    "capabilities": [
+      {"id": "authentication", "title": "Authentication on every non-public route", "must": true, "families": ["ASVS", "NIST53"], "keywords": ["authentication", "access control"], "files_any": ["*auth*", "middleware.*"], "rules_any": []},
+      {"id": "authorization", "title": "Per-resource authorization (not just authn)", "must": true, "families": ["ASVS", "NIST53"], "keywords": ["authorization", "access control"], "files_any": ["*auth*", "*polic*", "*guard*"], "rules_any": ["IAM001"]},
+      {"id": "input-validation", "title": "Input validation / parameterized queries", "must": true, "families": ["ASVS"], "keywords": ["injection", "parameter", "select"], "files_any": [], "rules_any": ["SDLC001", "SDLC002", "SDLC003"]},
+      {"id": "rate-limiting", "title": "Rate limiting / anti-automation", "must": true, "families": ["ASVS"], "keywords": ["rate limit", "anti-automation", "excessive"], "files_any": ["middleware.*", "*ratelimit*"], "rules_any": ["WEB004"]},
+      {"id": "tls-transport", "title": "TLS-only transport, no cleartext", "must": true, "families": ["ASVS", "NIST53"], "keywords": ["transport", "encrypted communicat"], "files_any": ["Dockerfile*", "docker-compose*", "*.tf"], "rules_any": ["NET001", "NET004", "NET002"]},
+      {"id": "cors-policy", "title": "Explicit CORS / origin policy", "must": true, "families": ["ASVS"], "keywords": ["cross-origin", "origin"], "files_any": ["middleware.*", "*cors*"], "rules_any": ["WEB005"]},
+      {"id": "security-logging", "title": "Security logging without sensitive data", "must": true, "families": ["ASVS"], "keywords": ["logging", "sensitive data"], "files_any": ["*log*"], "rules_any": ["LOG001", "PII001"]},
+      {"id": "secret-management", "title": "Secrets via manager/env, never code", "must": true, "families": ["ASVS"], "keywords": ["secret assets", "secrets management"], "files_any": [".env.example"], "rules_any": ["SEC001", "SEC008", "TRUFFLEHOG_VERIFIED_SECRET"]},
+      {"id": "dependency-scanning", "title": "Dependency + image scanning", "must": true, "families": ["CSF2"], "keywords": ["vulnerabilit", "component"], "files_any": ["requirements.txt", "package.json", "go.mod", "Cargo.lock", "Gemfile", "Dockerfile*"], "rules_any": ["DEP_VULN"]}
+    ]
+  },
+  "mcp-server": {
+    "label": "MCP server / AI agent tool host",
+    "capabilities": [
+      {"id": "tool-schema-validation", "title": "Strict tool input-schema validation", "must": true, "families": ["MCP", "ASVS"], "keywords": ["schema", "validation", "injection"], "files_any": ["*tool*", "server.*", "manifest*"], "rules_any": ["SDLC001", "SDLC003"]},
+      {"id": "auth-scope", "title": "Caller authentication + least-privilege tool scope", "must": true, "families": ["MCP", "NIST53"], "keywords": ["authentication", "authorization", "least privilege"], "files_any": ["*auth*"], "rules_any": ["IAM001"]},
+      {"id": "prompt-injection", "title": "Untrusted content never assembled into instructions", "must": true, "families": ["LLM", "AGENTIC"], "keywords": ["prompt injection", "instruction"], "files_any": [], "rules_any": ["LLM001"]},
+      {"id": "output-handling", "title": "Model/tool outputs validated before action", "must": true, "families": ["LLM", "AGENTIC"], "keywords": ["output", "excessive agency"], "files_any": [], "rules_any": ["LLM003"]},
+      {"id": "prompt-confidentiality", "title": "System instructions never leak to callers/logs", "must": true, "families": ["LLM"], "keywords": ["leakage", "confidential"], "files_any": [], "rules_any": ["LLM002", "LOG001"]},
+      {"id": "secret-management", "title": "API keys via env/manager, scoped per tool", "must": true, "families": ["ASVS"], "keywords": ["secret assets"], "files_any": [".env.example"], "rules_any": ["SEC001", "SEC009"]},
+      {"id": "execution-sandbox", "title": "Tool execution sandboxed with resource limits", "must": false, "families": ["AGENTIC", "MCP"], "keywords": ["sandbox", "isolation", "resource"], "files_any": ["Dockerfile*", "*.tf"], "rules_any": ["SDLC005"]},
+      {"id": "audit-logging", "title": "Tool-call audit log (who ran what, when)", "must": true, "families": ["ASVS", "MCP"], "keywords": ["logging", "audit"], "files_any": ["*log*"], "rules_any": ["LOG001"]}
+    ]
+  },
+  "llm-app": {
+    "label": "LLM app (chatbot, RAG, assistant)",
+    "capabilities": [
+      {"id": "prompt-injection", "title": "Untrusted input kept out of system instructions", "must": true, "families": ["LLM"], "keywords": ["prompt injection"], "files_any": [], "rules_any": ["LLM001"]},
+      {"id": "output-handling", "title": "Model output validated before use/display/execution", "must": true, "families": ["LLM"], "keywords": ["output", "excessive agency"], "files_any": [], "rules_any": ["LLM003"]},
+      {"id": "prompt-confidentiality", "title": "System prompt not exposed or logged", "must": true, "families": ["LLM"], "keywords": ["leakage"], "files_any": [], "rules_any": ["LLM002"]},
+      {"id": "rag-isolation", "title": "Retrieval store isolated per tenant; poison-resistant", "must": false, "families": ["LLM", "ATLAS"], "keywords": ["retrieval", "poison", "isolation"], "files_any": ["*rag*", "*retriev*", "*vector*"], "rules_any": []},
+      {"id": "data-retention", "title": "Prompt/response retention + deletion policy", "must": true, "families": ["LLM", "NIST53"], "keywords": ["retention", "personal data", "privacy"], "files_any": ["*privacy*", "*retention*", "PRIVACY*"], "rules_any": ["PII001"]},
+      {"id": "rate-limiting", "title": "Per-user quotas (cost + abuse control)", "must": true, "families": ["ASVS"], "keywords": ["rate limit", "excessive"], "files_any": ["middleware.*", "*quota*", "*limit*"], "rules_any": []},
+      {"id": "secret-management", "title": "Model API keys server-side only", "must": true, "families": ["ASVS"], "keywords": ["secret assets"], "files_any": [".env.example"], "rules_any": ["SEC001", "SEC009"]}
+    ]
+  },
+  "cli-tool": {
+    "label": "CLI tool",
+    "capabilities": [
+      {"id": "input-validation", "title": "Args/env/paths validated; no shell interpolation", "must": true, "families": ["ASVS"], "keywords": ["injection", "command"], "files_any": [], "rules_any": ["SDLC003", "SDLC001"]},
+      {"id": "secret-handling", "title": "Secrets via env/keyring, never argv or logs", "must": true, "families": ["ASVS"], "keywords": ["secret assets"], "files_any": [], "rules_any": ["SEC001", "LOG001"]},
+      {"id": "config-permissions", "title": "Config/cache files created with tight permissions", "must": false, "families": ["NIST53"], "keywords": ["permission", "least privilege"], "files_any": [], "rules_any": []},
+      {"id": "update-channel", "title": "Authenticity-checked updates (signed or pinned)", "must": false, "families": ["CSF2"], "keywords": ["integrity", "signature", "update"], "files_any": [], "rules_any": []},
+      {"id": "error-usage", "title": "Safe errors + --help (no internal paths/secrets)", "must": false, "families": ["ASVS"], "keywords": ["error handling"], "files_any": [], "rules_any": []}
+    ]
+  },
+  "library-sdk": {
+    "label": "Library / SDK",
+    "capabilities": [
+      {"id": "input-validation", "title": "All caller-supplied input validated at boundaries", "must": true, "families": ["ASVS"], "keywords": ["validation", "injection"], "files_any": [], "rules_any": ["SDLC001", "SDLC002"]},
+      {"id": "safe-defaults", "title": "Secure defaults (TLS verify on, no debug)", "must": true, "families": ["ASVS"], "keywords": ["default", "debug", "verif"], "files_any": [], "rules_any": ["CFG001", "NET002"]},
+      {"id": "no-unsafe-deser", "title": "No unsafe deserialization of caller data", "must": true, "families": ["ASVS"], "keywords": ["deserialization"], "files_any": [], "rules_any": ["SDLC004"]},
+      {"id": "dependency-hygiene", "title": "Pinned deps + lockfile shipped", "must": false, "families": ["CSF2"], "keywords": ["component", "integrity"], "files_any": ["package-lock.json", "Cargo.lock", "poetry.lock", "go.sum"], "rules_any": ["DEP_VULN"]},
+      {"id": "security-docs", "title": "Security notes (threat model, reporting channel)", "must": false, "families": ["CSF2"], "keywords": ["governance", "report"], "files_any": ["SECURITY*", "security*"], "rules_any": []}
+    ]
+  },
+  "iac-cloud": {
+    "label": "IaC / cloud deployment",
+    "capabilities": [
+      {"id": "encryption-at-rest", "title": "Encryption at rest on every store", "must": true, "families": ["NIST53", "CSF2"], "keywords": ["encrypt", "at rest", "storage"], "files_any": ["*.tf", "*.bicep", "*.yaml", "*.yml", "*.json"], "rules_any": ["ENC001"]},
+      {"id": "least-privilege-iam", "title": "Least-privilege IAM, no wildcards", "must": true, "families": ["NIST53"], "keywords": ["least privilege", "access"], "files_any": ["*.tf", "*.yaml", "*.yml", "*.json"], "rules_any": ["IAM001", "CLOUD_IAM_POLICY"]},
+      {"id": "no-public-storage", "title": "No public storage / permissive ACLs", "must": true, "families": ["NIST53"], "keywords": ["public", "exposure"], "files_any": ["*.tf", "*.yaml", "*.yml"], "rules_any": ["ENC002", "CLOUD_STORAGE_PUBLIC", "CLOUD_S3_PUBLIC"]},
+      {"id": "network-segmentation", "title": "Segmented networks, no world-open ingress", "must": true, "families": ["NIST53"], "keywords": ["segment", "firewall", "ingress"], "files_any": ["*.tf", "*.yaml", "*.yml"], "rules_any": ["NET003"]},
+      {"id": "tls-transport", "title": "TLS-only listeners, no cleartext protocols", "must": true, "families": ["ASVS", "NIST53"], "keywords": ["transport", "encrypt"], "files_any": ["*.tf", "nginx.conf"], "rules_any": ["NET001", "NET004"]},
+      {"id": "secret-refs", "title": "Secrets referenced (vault/secret manager), never literal", "must": true, "families": ["ASVS"], "keywords": ["secret assets", "secrets management"], "files_any": ["*.tf", "*.yaml", "*.yml"], "rules_any": ["SEC001", "CKV_SECRET_1"]},
+      {"id": "logging-monitoring", "title": "Audit logging + drift detection", "must": true, "families": ["CSF2", "NIST53"], "keywords": ["audit", "monitor", "drift"], "files_any": ["*.tf", "*.yaml", "*.yml"], "rules_any": ["CLOUD_DRIFT"]},
+      {"id": "state-protection", "title": "State backend encrypted + locked", "must": false, "families": ["NIST53"], "keywords": ["integrity", "lock"], "files_any": ["*.tf", "backend*"], "rules_any": []}
+    ]
+  },
+  "kubernetes": {
+    "label": "Kubernetes workloads",
+    "capabilities": [
+      {"id": "pod-security", "title": "Restricted pod security (non-root, no privileged)", "must": true, "families": ["K8S", "NIST53"], "keywords": ["privileged", "security context", "isolation"], "files_any": ["*.yaml", "*.yml"], "rules_any": ["K8S001", "SDLC005"]},
+      {"id": "rbac", "title": "Scoped RBAC, no wildcard verbs/resources", "must": true, "families": ["K8S", "NIST53"], "keywords": ["least privilege", "access", "authoriz"], "files_any": ["*.yaml", "*.yml"], "rules_any": ["K8S002", "IAM001"]},
+      {"id": "network-policy", "title": "NetworkPolicies default-deny + explicit allows", "must": true, "families": ["K8S"], "keywords": ["network", "segment", "policy"], "files_any": ["*networkpolic*", "*.yaml", "*.yml"], "rules_any": ["NET003"]},
+      {"id": "image-pinning", "title": "Pinned, scanned images (no :latest)", "must": true, "families": ["K8S", "CSF2"], "keywords": ["image", "integrity", "supply chain"], "files_any": ["*.yaml", "*.yml", "Dockerfile*"], "rules_any": ["DEP_VULN", "SDLC005"]},
+      {"id": "secrets", "title": "Secrets via external manager, not env literals", "must": true, "families": ["ASVS"], "keywords": ["secret assets"], "files_any": ["*.yaml", "*.yml"], "rules_any": ["SEC001"]},
+      {"id": "resource-limits", "title": "CPU/memory requests + limits everywhere", "must": false, "families": ["K8S"], "keywords": ["resource", "quota", "limit"], "files_any": ["*.yaml", "*.yml"], "rules_any": []}
+    ]
+  },
+  "ci-pipeline": {
+    "label": "CI / release pipeline",
+    "capabilities": [
+      {"id": "pinning", "title": "Third-party actions pinned to SHAs", "must": true, "families": ["CICD"], "keywords": ["integrity", "supply chain", "pin"], "files_any": [".github/workflows/*", ".gitlab-ci.yml", "Jenkinsfile"], "rules_any": ["CICD001"]},
+      {"id": "token-scope", "title": "Minimal token permissions (no write-all)", "must": true, "families": ["CICD", "NIST53"], "keywords": ["least privilege", "permission"], "files_any": [".github/workflows/*"], "rules_any": ["CICD002"]},
+      {"id": "secret-handling", "title": "Secrets via env mapping, never interpolated", "must": true, "families": ["CICD", "ASVS"], "keywords": ["secret assets", "exposure"], "files_any": [".github/workflows/*"], "rules_any": ["CICD003", "SEC001"]},
+      {"id": "sbom-provenance", "title": "SBOM + build provenance published", "must": false, "families": ["CICD", "CSF2"], "keywords": ["provenance", "attestation", "component"], "files_any": ["sbom*", "*.spdx*", "*.cdx*"], "rules_any": ["SBOM_COPYLEFT_LICENSE", "SBOM_LICENSE_UNKNOWN"]},
+      {"id": "branch-protection", "title": "Protected branches + required reviews", "must": true, "families": ["CICD"], "keywords": ["review", "protect", "governance"], "files_any": [], "rules_any": ["SCORECARD_LOW_SCORE"]},
+      {"id": "secret-scanning", "title": "Push-time secret scanning", "must": true, "families": ["CICD"], "keywords": ["secret", "leak"], "files_any": [".github/workflows/*", ".gitleaks*", ".pre-commit*"], "rules_any": ["TRUFFLEHOG_VERIFIED_SECRET"]}
+    ]
+  },
+  "mobile-app": {
+    "label": "Mobile app",
+    "capabilities": [
+      {"id": "transport-security", "title": "TLS + pinning, no cleartext traffic", "must": true, "families": ["MASVS", "MOBILE"], "keywords": ["transport", "pinning", "cleartext"], "files_any": ["AndroidManifest.xml", "Info.plist", "*network*security*"], "rules_any": ["NET001", "NET002"]},
+      {"id": "storage-encryption", "title": "Sensitive data in encrypted storage only", "must": true, "families": ["MASVS"], "keywords": ["storage", "encrypt", "keystore", "keychain"], "files_any": [], "rules_any": ["ENC001", "PII001"]},
+      {"id": "deeplink-validation", "title": "Deep links / intents validated", "must": true, "families": ["MASVS", "MOBILE"], "keywords": ["deep link", "intent", "scheme", "validation"], "files_any": ["AndroidManifest.xml", "Info.plist"], "rules_any": []},
+      {"id": "webview-hardening", "title": "WebViews hardened (no JS bridge to secrets)", "must": false, "families": ["MASVS", "MOBILE"], "keywords": ["webview", "javascript", "bridge"], "files_any": [], "rules_any": ["WEB003"]},
+      {"id": "secret-management", "title": "No hardcoded API keys/tokens", "must": true, "families": ["MASVS"], "keywords": ["secret", "api key"], "files_any": [], "rules_any": ["SEC007", "SEC009"]}
+    ]
+  },
+  "desktop-app": {
+    "label": "Desktop / native app",
+    "capabilities": [
+      {"id": "update-signing", "title": "Signed, verified auto-updates", "must": true, "families": ["CSF2"], "keywords": ["update", "signature", "integrity"], "files_any": ["*update*", "*sparkle*", "*squirrel*"], "rules_any": []},
+      {"id": "ipc-validation", "title": "IPC / deep-link input validated", "must": true, "families": ["ASVS"], "keywords": ["injection", "validation", "deserialization"], "files_any": [], "rules_any": ["SDLC002", "SDLC004"]},
+      {"id": "secret-storage", "title": "Secrets in OS store (keychain/credential manager)", "must": true, "families": ["ASVS", "NIST53"], "keywords": ["secret", "credential", "keychain"], "files_any": [], "rules_any": ["SEC001", "SEC003"]},
+      {"id": "memory-safety", "title": "Memory-safe parsing of untrusted files", "must": false, "families": ["CWE", "ASVS"], "keywords": ["buffer", "overflow", "memory"], "files_any": [], "rules_any": ["SDLC004"]}
+    ]
+  },
+  "data-pipeline": {
+    "label": "Data / ML pipeline",
+    "capabilities": [
+      {"id": "pii-governance", "title": "PII identified, minimized, access-logged", "must": true, "families": ["NIST53", "CSF2"], "keywords": ["personal data", "sensitive data", "privacy"], "files_any": ["*schema*", "*contract*", "dbt*", "*.sql"], "rules_any": ["PII001"]},
+      {"id": "access-control", "title": "Least-privilege store/compute access", "must": true, "families": ["NIST53"], "keywords": ["least privilege", "access"], "files_any": ["*.tf", "*.yaml", "*.yml"], "rules_any": ["IAM001"]},
+      {"id": "retention-deletion", "title": "Retention schedule + deletion path", "must": true, "families": ["NIST53"], "keywords": ["retention", "deletion", "disposal"], "files_any": [], "rules_any": []},
+      {"id": "secret-management", "title": "Connection strings via secret refs", "must": true, "families": ["ASVS"], "keywords": ["secret assets"], "files_any": [], "rules_any": ["SEC008", "SEC001"]},
+      {"id": "quality-gates", "title": "Validation gates before serving/prod tables", "must": false, "families": ["CSF2"], "keywords": ["integrity", "validation", "quality"], "files_any": ["*test*", "*great_expectations*", "*soda*"], "rules_any": ["SDLC002"]}
+    ]
+  }
+}

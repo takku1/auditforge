@@ -46,8 +46,13 @@ in sync and indexed into one queryable control catalog.
 ## Quick start
 
 ```bash
-# Core auditor/knowledge-base (no agentic-layer deps required)
-pip install PyYAML requests python-dotenv openpyxl pytest
+# Core auditor/knowledge-base (no agentic-layer deps required).
+# Use a project-local venv on every platform - never the system Python.
+# A venv created on Linux (bin/, lib64) does NOT work on Windows and vice
+# versa; if you switch OSes, delete .venv/ and recreate it below.
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements.txt   # Windows
+# .venv/bin/python -m pip install -r requirements.txt          # macOS/Linux
 
 # Pull every knowledge-base clone to latest (first run: clones them)
 pwsh scripts/update_sources.ps1        # Windows PowerShell 5.1+ / pwsh

@@ -85,3 +85,10 @@ references/c2m2/
 # URL; never committed, same rule as (a) above).
 references/disa-stig/
 references/ffiec/
+references/cisa-cpg/
+references/cvss-v4/
+references/nist-800-63-4/
+references/nist-ai-600-1/
+references/samm/
+
+resources/

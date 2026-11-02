@@ -58,7 +58,11 @@ PLACEHOLDER_RE = re.compile(
 # PII001/NET001/NET004 skip them instead of forcing users to obfuscate real
 # test fixtures. See docs/field-test-roninai-2026-08-25.md §G5/G7.
 RESERVED_SUFFIX_RE = re.compile(
+    # Dotted suffixes: api.example, svc.test, thing.internal, ...
     r"(?i)\.(test|example|localhost|invalid|local|ipc|internal)\b"
+    # Bare RFC 2606 documentation domains: user@example.com has no dot
+    # before "example", so the suffix arm above never fires on it.
+    r"|@example\.(com|net|org)\b"
 )
 
 
@@ -165,6 +169,59 @@ RULES = [
         ),
         remediation="Revoke the token at its issuing provider and load it from a "
                     "secret store at runtime. Evidence: docs/field-test-roninai-2026-08-25.md §G8.",
+    ),
+    Rule(
+        id="SEC010", name="User Input Into Mail Header",
+        severity="HIGH",
+        controls=("CC8.1",),
+        patterns=_r(
+            r"Mail\s*::\s*(to|cc|bcc|from)\s*\(\s*\$(request|_(GET|POST|REQUEST|COOKIE))",
+            r"\.setHeader\s*\([^,]+,\s*req\.(query|body|params)",
+            r"\.sendMail\s*\([^)]*req\.(query|body|params)",
+        ),
+        remediation="Request data is flowing into an email header or envelope - "
+                    "an attacker can inject BCC/Subject lines. Validate against "
+                    "an allowlist and strip CR/LF before handing to the mailer "
+                    "(CWE-113). "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
+        id="SEC011", name="Timing-Unsafe Secret Comparison",
+        severity="MEDIUM",
+        controls=("CC6.1",),
+        patterns=_r(
+            r"\b\w*(?i:token|secret|signature|hmac)\w*\s*(==|===|!=|!==)\s*\w*(?i:token|secret|signature|hmac)\w*",
+        ),
+        remediation="Two secret-shaped values are compared with ==/=== - use a "
+                    "constant-time compare (crypto.timingSafeEqual, hmac.compare_digest, "
+                    "hash_equals) so response time does not leak the secret. "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
+        id="SEC012", name="Prototype Pollution Sink",
+        severity="MEDIUM",
+        controls=("CC8.1",),
+        patterns=_r(
+            r"__proto__",  # soc2-ignore: rule pattern text matches itself
+            r"\.constructor\s*\[",
+            r"\.prototype\s*\[",
+        ),
+        remediation="A __proto__/constructor/prototype write with a dynamic key "
+                    "lets an attacker pollute every object - freeze the prototype, "
+                    "validate keys against an allowlist (deny __proto__/constructor/prototype), "
+                    "or use keyless maps. "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
+        id="SUPPRESS001", name="Unjustified Suppression",
+        severity="LOW",
+        controls=("CC8.1",),
+        patterns=(),
+        remediation="This soc2-ignore carries no justification - append a `: reason` "
+                    "suffix naming why the finding is accepted (false positive, "
+                    "accepted risk with expiry, compensating control). Bare "
+                    "suppressions rot into blind spots. "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
     ),
     # ---------------- Least privilege / IAM (CC6.1, CC6.3) ----------------
     Rule(
@@ -296,6 +353,53 @@ RULES = [
     ),
     # ---------------- PII & privacy (CC6.1) ----------------
     Rule(
+        id="PRIV001", name="Third-Party Tracker Loaded",
+        severity="MEDIUM",
+        controls=("CC6.1",),
+        patterns=_r(
+            r"googletagmanager\.com/gtag/js",
+            r"clarity\.ms/tag/",
+            r"connect\.facebook\.net/\S*fbevents\.js",
+            r"hotjar\.com",
+            r"cdn\.segment\.com/analytics",
+            r"cdn\.mxpnl\.com",
+            r"posthog\.(init|capture)",
+        ),
+        remediation="A third-party tracker (analytics, session replay, ad "
+                    "pixel) loads on this page - each one needs prior user "
+                    "consent (GDPR Art.6 / CCPA) and a data-processing record. "
+                    "Gate it behind the consent banner or remove it. "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
+        id="PRIV002", name="IP Address Written to Log Sink",
+        severity="MEDIUM",
+        controls=("CC6.1",),
+        patterns=_r(
+            r"(console\.(log|info|debug|warn|error)|logger?\.(info|debug|warn|error)|winston\.\w+|pino\.\w+|bunyan\.\w+)\s*\([^()]{0,200}?\b(ip|clientIp|client_ip|remoteAddr|remote_addr|xForwardedFor|x_forwarded_for)\b",
+            r"\bINSERT\s+INTO\s+\w*log\w*\b[^;]{0,200}?\b(ip|clientIp|client_ip|remoteAddr|remote_addr)\b",
+            r"(appendFileSync|appendFile)\s*\([^;]{0,160}?\.log\b[^;]{0,160}?\b(ip|clientIp|client_ip)\b",
+        ),
+        remediation="An IP address flows into a log sink (console/logger call, "
+                    "log table, *.log append). Scrub or hash IPs at write time, "
+                    "state the retention window in the privacy policy, and honor "
+                    "deletion requests (GDPR Art.17). "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
+        id="PRIV003", name="Cookie or Session-Storage Write",
+        severity="MEDIUM",
+        controls=("CC6.1",),
+        patterns=_r(
+            r"document\.cookie\s*=[^=]",
+            r"sessionStorage\.setItem\s*\(",
+        ),
+        remediation="A cookie or sessionStorage entry is written - namespace it "
+                    "(__Secure- / __Host- where applicable) and document the "
+                    "eviction path so GDPR/CCPA deletion requests can reach it. "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
         id="PII001", name="PII in Logs or Code", severity="HIGH",
         controls=("CC7.2",),
         patterns=_r(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b", # Email
@@ -373,6 +477,11 @@ EXTRA_RULES = [
             r"(?i)(system_prompt|system_message|system_instruction)\s*=\s*f['\"]",
             r"(?i)(system_prompt|system_message|system_instruction)\s*=\s*[^#\n]*\+",
             r"messages\s*=\s*\[[^\]]{0,500}?(\+\s*\w+|f['\"])",
+            r"\bsystem\s*:\s*`[^`]{0,800}?\$\{",
+            r"(?i)messages\s*:\s*\[[^\]]{0,800}?\$\{",
+            r"\bsystem\s*:\s*[^,}\n]{0,200}?\+\s*\w+",
+            r"\bsystem\s*=\s*f['\"]",
+            r"\bsystem\s*=\s*[^#\n]{0,200}?\+\s*\w+",
         ),
         extensions=frozenset(CODE_EXTENSIONS),
         remediation="Treat this as a direct prompt-injection sink (OWASP LLM "
@@ -389,11 +498,34 @@ EXTRA_RULES = [
         patterns=_r(
             r"(?i)\b(return|print|console\.(log|error|warn)|logger?\.(info|debug|warn|error)|jsonify)\b\s*\(?[^()\n]{0,150}?\bsystem_prompt\b",
             r"(?i)f['\"][^'\"\n]{0,150}?\{\s*system_prompt\s*\}",
+            r"(console\.(log|error|warn)|\breturn\b)\s*[(`]?[^()\n]{0,150}?\$\{\s*system\s*\}",
         ),
         extensions=frozenset(CODE_EXTENSIONS),
         remediation="Do not return, log, or render system-prompt text to "
                     "callers (OWASP LLM Top 10 LLM07:2025 System Prompt "
                     "Leakage); system instructions are confidential (CC6.1).",
+    ),
+    Rule(
+        id="LLM004", name="LLM Output Rendered to HTML Sink",
+        severity="HIGH",
+        controls=("CC8.1",),
+        patterns=_r(
+            r"\.innerHTML\s*=\s*(model|llm|completion|message|response|generated|assistant|chat|reply|answer|content|output|text)\w*\b",
+            r"set:html=\{\s*(model|llm|completion|message|response|generated|assistant|chat|reply|answer|content|output|text)\w*",
+            r"\{\s*__html\s*:\s*(model|llm|completion|message|response|generated|assistant|chat|reply|answer|content|output|text)\w*",
+            r"dangerouslySetInnerHTML\s*=\s*\{\s*__html\s*:\s*(model|llm|completion|message|response|generated|assistant|chat|reply|answer|content|output|text)\w*",  # soc2-ignore: rule pattern text matches itself
+            r"v-html\s*=\s*\"(model|llm|completion|message|response|generated|assistant|chat|reply|answer|content|output|text)\w*\"",
+            r"\{@html\s+(model|llm|completion|message|response|generated|assistant|chat|reply|answer|content|output|text)\w*",
+            r"\.innerHTML\s*=\s*\w+\.(content|text|output)\b",
+            r"set:html=\{\s*\w+\.(content|text)\b[^}]*\}",
+        ),
+        remediation="Model-generated text is flowing into an HTML sink "
+                    "(innerHTML, set:html, dangerouslySetInnerHTML, v-html, "  # soc2-ignore: remediation prose names the sinks; not a sink
+                    "{@html}) - render it as text or through the framework "
+                    "escaper, and never let model output form markup, URLs, "
+                    "or scripts without an allowlist (OWASP LLM Top 10 "
+                    "LLM05:2025 Improper Output Handling; ASVS V1.2.1). "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
     ),
     Rule(
         id="LLM003", name="Unvalidated LLM Tool Output Executed", severity="HIGH",
@@ -442,6 +574,153 @@ EXTRA_RULES = [
         remediation="Scope RBAC rules to the minimum verbs/resources required "
                     "(least privilege, CC6.1/CC6.3); wildcard verbs or resources "
                     "grant full API control wherever the binding applies.",
+    ),
+    Rule(
+        id="WEB001", name="Missing Security-Headers Config", severity="MEDIUM",
+        controls=("CC6.7",),
+        patterns=(),
+        remediation="Ship a headers config (_headers, vercel.json, "
+                    "netlify.toml, or equivalent) enforcing HSTS, a "
+                    "Content-Security-Policy, X-Content-Type-Options: "
+                    "nosniff, and frame-ancestors; verify with the ASVS "
+                    "V3.4 checks (CC6.7).",
+    ),
+    Rule(
+        id="WEB002", name="Report-Only Content Security Policy", severity="LOW",
+        controls=("CC6.1",),
+        patterns=_r(
+            r"Content-Security-Policy-Report-Only",  # soc2-ignore: rule pattern text matches itself
+        ),
+        remediation="Report-only mode collects telemetry but blocks nothing; "
+                    "promote to an enforced Content-Security-Policy (keep "
+                    "report-uri/report-to for signal) once clean (ASVS V3.4.7).",
+    ),
+    Rule(
+        id="WEB003", name="DOM XSS Sink (innerHTML / set:html)", severity="MEDIUM",
+        controls=("CC8.1",),
+        patterns=_r(
+            r"\.innerHTML\s*=\s*(?![\"'`\s])",  # soc2-ignore: rule pattern text matches itself
+            r"set:html=\{",
+            r"\.outerHTML\s*=\s*(?![\"'`\s])",  # soc2-ignore: rule pattern text matches itself
+            r"\.insertAdjacentHTML\s*\([^,)]+,\s*(?![\"'`\s])",  # soc2-ignore: rule pattern text matches itself
+            r"\bdocument\.write(ln)?\s*\((?![\"'`\s])",  # soc2-ignore: rule pattern text matches itself
+            r"dangerouslySetInnerHTML",  # soc2-ignore: rule pattern text matches itself
+            r"v-html\s*=",  # soc2-ignore: rule pattern text matches itself
+            r"\{@html\s+(?![\"'`\s}])",  # soc2-ignore: rule pattern text matches itself
+        ),
+        remediation="Assigning non-literal HTML to innerHTML (or Astro "
+                    "set:html) is a DOM-XSS sink; use textContent or the "
+                    "framework escaping, and encode untrusted data per "
+                    "ASVS V1.2.1/V1.2.3 (CC8.1).",
+    ),
+    Rule(
+        id="WEB004", name="State-Changing API Route Without Rate Limiting",
+        severity="MEDIUM",
+        controls=("CC6.1",),
+        patterns=(),
+        remediation="Bind every state-changing route to a rate limiter "
+                    "(per-endpoint quotas, 429s) to blunt credential-stuffing "
+                    "and enumeration; see ASVS V2.4.1/V6.1.1 (CC6.1).",
+    ),
+    Rule(
+        id="WEB005", name="State-Changing Handler Without Origin Check",
+        severity="LOW",
+        controls=("CC6.1",),
+        patterns=(),
+        remediation="Verify Origin/Referer (or a CSRF token) on "
+                    "state-changing handlers so another site cannot drive "
+                    "them through visitors browsers; see ASVS V3.4.2/V3.3.2 "
+                    "(CC6.1).",
+    ),
+    Rule(
+        id="WEB006", name="Weak Content-Security-Policy Value",
+        severity="MEDIUM",
+        controls=("CC6.7",),
+        patterns=(),
+        remediation="A Content-Security-Policy is configured but script-src "
+                    "allows unsafe-inline with no hash, nonce, or "
+                    "strict-dynamic fallback - any injected markup runs. "
+                    "Remove unsafe-inline (hash or nonce every script) "
+                    "or add strict-dynamic with nonces; see ASVS V3.4.3 "
+                    "(CC6.7). Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
+        id="WEB007", name="CSP Without Violation Reporting",
+        severity="LOW",
+        controls=("CC6.1",),
+        patterns=(),
+        remediation="The Content-Security-Policy has no report-uri or report-to "
+                    "directive, so real-world violations are invisible to the "
+                    "operator. Add a reporting endpoint (and monitor it); see "
+                    "ASVS V3.4.7 (CC6.1). Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
+        id="WEB008", name="Weak HSTS Value",
+        severity="LOW",
+        controls=("CC6.7",),
+        patterns=(),
+        remediation="Strict-Transport-Security is present but weak: use "
+                    "max-age=31536000 (one year) or longer plus includeSubDomains "
+                    "and preload (then submit to hstspreload.org); see ASVS V3.4.1 "
+                    "(CC6.7). Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
+        id="WEB009", name="No Single Authentication Gate",
+        severity="MEDIUM",
+        controls=("CC6.1",),
+        patterns=(),
+        remediation="No single authentication gate (withAuth, requireAuth, "
+                    "authenticate, verifyToken, or equivalent) was found in "
+                    "the API middleware or route files. Every route doing its "
+                    "own ad-hoc auth check drifts; put one gate in the "
+                    "middleware chain (OWASP A01:2021, ASVS V3.2.2). "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
+        id="WEB010", name="No Global Error Handler",
+        severity="MEDIUM",
+        controls=("CC7.1",),
+        patterns=(),
+        remediation="No global error handler (onError, handleError, "
+                    "window.onerror, uncaughtException/unhandledRejection) "
+                    "was found - framework defaults leak stack traces and "
+                    "skip alerting. Add one handler that logs and returns a "
+                    "generic response (OWASP A05:2021). "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
+        id="WEB011", name="No Structured Logging Signal",
+        severity="MEDIUM",
+        controls=("CC7.1",),
+        patterns=(),
+        remediation="No structured logging signal (logger.*, console.*, "
+                    "Sentry/captureException) was found in the API middleware "
+                    "or route files. Rejected requests, errors, and auth "
+                    "failures must be logged in one queryable shape (CC7.2). "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
+        id="WEB012", name="No Request Size or Duration Bound",
+        severity="LOW",
+        controls=("CC6.1",),
+        patterns=(),
+        remediation="No request size or duration bound (bodyLimit, "
+                    "maxBodySize, maxDuration, timeout) was found. Unbounded "
+                    "bodies and runtimes are a resource-exhaustion vector; "
+                    "set both (OWASP API4:2023). "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
+        id="WEB013", name="Bot Challenge Without Server-Side Verification",
+        severity="MEDIUM",
+        controls=("CC6.1",),
+        patterns=(),
+        remediation="A bot-challenge widget (Turnstile / Cloudflare challenge) is "
+                    "embedded but no server-side verification call (e.g. Turnstile "
+                    "siteverify) was found - client-side-only checks are theater. "
+                    "Verify the token server-side on every protected action "
+                    "(OWASP A07:2021). "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
     ),
 ]
 

@@ -3,6 +3,8 @@ import re
 import bisect
 import fnmatch
 import shutil
+import socket
+import ssl
 import subprocess
 import json
 import sys
@@ -11,6 +13,7 @@ from .models import Finding, Rule, UnifiedFinding
 from .rules import (
     RULES, SKIP_DIRS, SKIP_FILES, SKIP_EXTENSIONS, MAX_FILE_BYTES,
     PLACEHOLDER_RE, RESERVED_SUFFIX_RE, TEST_PATH_RE, SUPPRESS_TOKEN,
+    RULES_BY_ID,
     is_comment, downgrade
 )
 
@@ -49,7 +52,49 @@ def iter_files(root: str, excludes: list):
             yield path, rel_posix
 
 
-def scan_file(path: str, rel: str) -> "tuple[list, Optional[str]]":
+def _pii_allowed(value: str, patterns) -> bool:
+    """pii_allow (.soc2rc.yml): public contact addresses that are not
+    findings, e.g. ["*@seancarneymusic.com"]. fnmatch, case-insensitive.
+    Applies to working-tree AND history scans."""
+    v = (value or "").strip().lower()
+    return any(fnmatch.fnmatchcase(v, str(p).strip().lower())
+               for p in (patterns or []))
+
+
+_SAFE_STRINGIFY_RE = re.compile(
+    r"JSON\.stringify\s*\([^;]*\)\.replace\s*\(",
+)
+_MODEL_OUTPUT_RE = re.compile(
+    r"fetch\s*\(|messages\.create|chat\.completions|completions\.create"
+    r"|\bmodel_output\b|\bllm_output\b|\bcompletion\b",
+)
+def _is_bare_suppression(line_text: str) -> bool:
+    """True when a soc2-ignore carries no justification (field report §3.10):
+    a bare token, or a colon with nothing actionable after it. A `: reason`
+    suffix keeps the suppression silent. Only lines that also matched a
+    rule reach this check, so prose mentions never warn."""
+    idx = line_text.find(SUPPRESS_TOKEN)
+    rest = line_text[idx + len(SUPPRESS_TOKEN):].strip()
+    if not rest.startswith(":"):
+        return True
+    return not rest[1:].strip(" \t\"'#").strip()
+
+
+_RAW_IMPORT_RE = re.compile(
+    r"import\s+(\w+)\s+from\s*[^\s;]+\?raw",
+)
+
+
+def _raw_import_sink(line_text: str, content: str) -> bool:
+    """True when line_text uses a binding imported from a ?raw static asset
+    (build-time data, not runtime input - field report §3.8)."""
+    for name in _RAW_IMPORT_RE.findall(content):
+        if re.search(r"\b" + re.escape(name) + r"\b", line_text):
+            return True
+    return False
+
+
+def scan_file(path: str, rel: str, pii_allow: list = None) -> "tuple[list, Optional[str]]":
     """Returns (findings, skip_reason). skip_reason is None for a normally
     scanned file, else "oversized" / "binary" / "unreadable" - see R-017:
     these were silent no-ops before, indistinguishable from "scanned, found
@@ -74,6 +119,7 @@ def scan_file(path: str, rel: str) -> "tuple[list, Optional[str]]":
     in_test = bool(TEST_PATH_RE.search(rel))
 
     findings = []
+    warned_lines: set = set()
     for rule in RULES:
         ext_match = not rule.extensions or ext in rule.extensions
         # Extension-less files (Dockerfile, Dockerfile.dev, ...) match on
@@ -86,6 +132,8 @@ def scan_file(path: str, rel: str) -> "tuple[list, Optional[str]]":
         for pattern in rule.patterns:
             for match in pattern.finditer(content):
                 if rule.check_reserved_suffix and RESERVED_SUFFIX_RE.search(match.group(0)):
+                    continue
+                if rule.id == "PII001" and pii_allow and _pii_allowed(match.group(0), pii_allow):
                     continue
                 if rule.value_group:
                     value = match.group(rule.value_group) or ""
@@ -105,9 +153,35 @@ def scan_file(path: str, rel: str) -> "tuple[list, Optional[str]]":
                 if is_comment(line_text, ext):
                     continue
                 if SUPPRESS_TOKEN in line_text:
+                    if line_no not in warned_lines and _is_bare_suppression(line_text):
+                        warned_lines.add(line_no)
+                        findings.append(Finding(
+                            rule=RULES_BY_ID["SUPPRESS001"], severity="LOW", file=rel,
+                            line=line_no, snippet=line_text.strip()[:200],
+                            in_test_context=in_test,
+                        ))
                     continue
+                if rule.id == "WEB002" and rel.lower().endswith(".md"):
+                    continue  # prose docs mentioning the header are not a deployment (§3.7)
 
                 severity = downgrade(rule.severity) if in_test else rule.severity
+                if rule.id == "WEB003":
+                    # Field report §3.8: JSON.stringify(...).replace(/</g, ...)
+                    # is the safe serialization idiom - LOW whatever else the
+                    # file does. A ?raw static-asset binding is build-time
+                    # data - also LOW. Otherwise a sink in a file that handles
+                    # model output or fetch responses is HIGH, not MEDIUM.
+                    if _SAFE_STRINGIFY_RE.search(line_text):
+                        severity = "LOW"
+                    elif _raw_import_sink(line_text, content):
+                        severity = "LOW"
+                    elif (severity == "MEDIUM" and _MODEL_OUTPUT_RE.search(content)
+                          and not rel.lower().endswith(".md")):
+                        # Prose .md naming sinks while discussing model output
+                        # is documentation, not a data flow - detection stays,
+                        # but it never escalates to HIGH (docs/ HIGH-gate
+                        # self-triage; cf. the WEB002 .md exemption above).
+                        severity = "HIGH"
                 snippet = match.group(0).strip()
                 if len(snippet) > 200:
                     snippet = snippet[:200] + "..."
@@ -123,7 +197,340 @@ _DIFF_FILE_RE = re.compile(r"^\+\+\+ b/(.+)$")
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
-def scan_git_history(root: str, excludes: "Optional[list]" = None, timeout: int = 300) -> list:
+_WEB_HEADERS_FILES = frozenset({
+    "_headers", "vercel.json", "netlify.toml", "next.config.js",
+    "next.config.mjs", "next.config.ts", "nginx.conf", "caddyfile",
+    "web.config",
+})
+_WEB_ROUTE_DIRS = frozenset({
+    "api", "routes", "endpoints", "server", "handlers", "controllers",
+})
+_WEB_POST_RE = re.compile(
+    r"export\s+(?:async\s+function\s+POST|const\s+POST)"
+    r"|app\.(post|put|patch|delete)\s*\("
+    r"|methods\s*=\s*\[[^\]]*[\'\"]POST"
+    r"|@app\.route\([^)]*POST"
+    r"|def\s+post\s*\(",
+    re.IGNORECASE,
+)
+_WEB_RATE_RE = re.compile(
+    r"ratelimit|rate.limit|throttl|slowapi|arcjet|upstash|token.?bucket",
+    re.IGNORECASE,
+)
+_WEB_ORIGIN_RE = re.compile(
+    r"\borigin\b|\breferer\b|csrf|xsrf|same.?origin|allowed.?hosts"
+    r"|trusted.?host|verify.*host",
+    re.IGNORECASE,
+)
+_CSP_NAME_VALUE_RE = re.compile(
+    r"(?im)^[ \t]*(content-security-policy(?:-report-only)?)\s*[:=]\s*(.+?)\s*$",
+)
+_HSTS_VALUE_RE = re.compile(
+    r"(?im)^[ \t]*strict-transport-security\s*[:=]\s*(.+?)\s*$",
+)
+_VERCEL_CSP_RE = re.compile(
+    r"\"key\"\s*:\s*\"Content-Security-Policy\"\s*,\s*\"value\"\s*:\s*\"([^\"]+)\"",
+    re.IGNORECASE,
+)
+_VERCEL_HSTS_RE = re.compile(
+    r"\"key\"\s*:\s*\"Strict-Transport-Security\"\s*,\s*\"value\"\s*:\s*\"([^\"]+)\"",
+    re.IGNORECASE,
+)
+# Framework middleware files whose rate-limit / origin checks cover
+# every route under the same directory subtree (Next/Astro
+# middleware.*, SvelteKit hooks.server.*) - field report §3.2.
+_MIDDLEWARE_BASENAMES = frozenset({
+    "middleware.ts", "middleware.js", "middleware.mjs", "middleware.py",
+    "hooks.server.ts", "hooks.server.js",
+})
+
+
+_BASELINE_AUTH_RE = re.compile(
+    r"withAuth|requireAuth|authenticate|verifyToken|verifySession|checkAuth|"
+    r"isAuthenticated|authorize",
+    re.IGNORECASE,
+)
+_BASELINE_ERROR_RE = re.compile(
+    r"onError|handleError|errorHandler|window\.onerror|uncaughtException|"
+    r"unhandledRejection|addEventListener\([^)]*error",
+)
+_BASELINE_LOG_RE = re.compile(
+    r"logger\.|\.log\.(info|warn|error|debug)|console\.(log|info|warn|error)|"
+    r"Sentry\.|captureException|reportError",
+)
+_BASELINE_BOUNDS_RE = re.compile(
+    r"bodyLimit|maxBodySize|maxRequestSize|BODY_LIMIT|maxDuration|max_duration|"
+    r"timeout\s*:\s*\d",
+)
+
+
+def _middleware_coverage(middleware_files: list) -> "tuple[dict, dict, str]":
+    """Map each middleware file to whether its text carries a
+    rate-limiting signal / an origin-check signal (field report §3.2).
+    Returns (rate_by_dir, origin_by_dir, combined_text): the two coverage
+    maps keyed by the middleware file\'s directory ("" for repo root),
+    plus all middleware texts joined for baseline-lane checks (§4 rows 11-14). Unreadable/oversized files are
+    treated as carrying no signal - absence of evidence, not evidence."""
+    rate_by_dir: dict = {}
+    origin_by_dir: dict = {}
+    texts: list = []
+    for path, rel in middleware_files:
+        try:
+            if os.path.getsize(path) > MAX_FILE_BYTES:
+                continue
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
+        rate_by_dir[parent] = (rate_by_dir.get(parent, False)
+                               or bool(_WEB_RATE_RE.search(text)))
+        origin_by_dir[parent] = (origin_by_dir.get(parent, False)
+                                 or bool(_WEB_ORIGIN_RE.search(text)))
+        texts.append(text)
+    return rate_by_dir, origin_by_dir, "\n".join(texts)
+
+
+def _mw_covers(coverage: dict, rel: str) -> bool:
+    """True when a middleware file in the route\'s own directory or any
+    ancestor directory carries the signal. A repo-root middleware.ts
+    (dir "") covers every route; sibling-app middleware does not."""
+    directory = rel.rsplit("/", 1)[0] if "/" in rel else ""
+    while True:
+        if coverage.get(directory):
+            return True
+        if not directory:
+            return False
+        directory = directory.rsplit("/", 1)[0] if "/" in directory else ""
+
+
+def _unquote(value: str) -> str:
+    """Strip one layer of matching surrounding quotes (chr() avoids quote
+    literals in source). Used for netlify.toml double-quoted values."""
+    if len(value) >= 2 and value[0] == value[-1] and ord(value[0]) in (34, 39):
+        return value[1:-1].strip()
+    return value
+
+
+def _csp_values_in(text: str) -> list:
+    """Content-Security-Policy values (enforced AND report-only) from
+    _headers / netlify.toml ("CSP: ..." / "CSP = ...", quotes stripped)
+    and vercel.json ("key": "Content-Security-Policy", "value": "...").
+    Report-only still gets WEB002, but its value is graded too - an
+    unsafe-inline report-only policy will be an unsafe enforced one the
+    day it ships. Field report §4 rows 15-17."""
+    out = []
+    for m in _CSP_NAME_VALUE_RE.finditer(text):
+        value = _unquote(m.group(2).strip())
+        if value:
+            out.append(value)
+    for m in _VERCEL_CSP_RE.finditer(text):
+        if m.group(1).strip():
+            out.append(m.group(1).strip())
+    return out
+
+
+def _hsts_values_in(text: str) -> list:
+    """Strict-Transport-Security values from the same config shapes."""
+    out = []
+    for m in _HSTS_VALUE_RE.finditer(text):
+        value = _unquote(m.group(1).strip())
+        if value:
+            out.append(value)
+    for m in _VERCEL_HSTS_RE.finditer(text):
+        if m.group(1).strip():
+            out.append(m.group(1).strip())
+    return out
+
+
+def _csp_directive(csp: str, name: str) -> str:
+    """Value of one CSP directive ("" when absent)."""
+    m = re.search(r"(?i)(?:^|;)\s*" + name + r"\s+([^;]+)", csp)
+    return m.group(1).strip() if m else ""
+
+
+def _csp_is_weak(csp: str) -> bool:
+    """True when script-src (or its default-src fallback) allows
+    unsafe-inline with no hash, nonce, or strict-dynamic mitigation."""
+    script = _csp_directive(csp, "script-src") or _csp_directive(csp, "default-src")
+    if not script or "unsafe-inline" not in script.lower():
+        return False
+    low = csp.lower()
+    return not ("sha256-" in low or "sha384-" in low or "sha512-" in low
+                or "nonce-" in low or "strict-dynamic" in low)
+
+
+def _csp_has_reporting(csp: str) -> bool:
+    low = csp.lower()
+    return "report-uri" in low or "report-to" in low
+
+
+def _hsts_problems(hsts: str) -> list:
+    """Weak-HSTS reasons ([] when the value is strong). A missing max-age
+    is the worst case - reported, not silently passed."""
+    low = hsts.lower()
+    m = re.search(r"max-age\s*=\s*(\d+)", low)
+    if not m:
+        return ["no max-age directive"]
+    problems = []
+    if int(m.group(1)) < 31536000:
+        problems.append("max-age=%s (< 31536000, one year)" % m.group(1))
+    if "includesubdomains" not in low:
+        problems.append("missing includeSubDomains")
+    if "preload" not in low:
+        problems.append("missing preload")
+    return problems
+
+
+def _web_finding(rule_id: str, rel: str, snippet: str) -> "Finding":
+    rule = RULES_BY_ID[rule_id]
+    in_test = bool(TEST_PATH_RE.search(rel))
+    return Finding(rule=rule, severity=rule.severity, file=rel, line=1,
+                   snippet=snippet, in_test_context=in_test)
+
+
+def scan_web_posture(root: str, excludes: list) -> list:
+    """File-presence lane the regex rules cannot express (field request):
+    missing security-headers config, and state-changing route files without
+    rate limiting or origin checks. Only runs when the target looks like a
+    web app; absence findings point at line 1 by convention."""
+    api_files: list = []
+    middleware_files: list = []
+    csp_values: list = []
+    hsts_values: list = []
+    turnstile_refs: list = []
+    siteverify_found = False
+    web = False
+    headers_ok = False
+    for path, rel in iter_files(root, excludes or []):
+        low = rel.lower().replace("\\", "/")
+        base = os.path.basename(low)
+        if base in _WEB_HEADERS_FILES:
+            web = True
+            try:
+                if base in ("next.config.js", "next.config.mjs", "next.config.ts"):
+                    with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                        htext = fh.read(200000)
+                    if "headers" not in htext:
+                        continue
+                else:
+                    if os.path.getsize(path) > MAX_FILE_BYTES:
+                        headers_ok = True
+                        continue
+                    with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                        htext = fh.read()
+                headers_ok = True
+                csp_values.extend((rel, v) for v in _csp_values_in(htext))
+                hsts_values.extend((rel, v) for v in _hsts_values_in(htext))
+            except OSError:
+                headers_ok = True
+            continue
+        if low.endswith((".astro", ".tsx", ".jsx", ".vue", ".svelte")) \
+                or base == "package.json" or os.path.basename(os.path.dirname(low)) in _WEB_ROUTE_DIRS:
+            web = True
+        parts = set(low.split("/"))
+        if parts & _WEB_ROUTE_DIRS or base.startswith(("route.", "+server.")):
+            api_files.append((path, rel))
+        if base in _MIDDLEWARE_BASENAMES:
+            middleware_files.append((path, rel))
+        if low.endswith((".html", ".js", ".jsx", ".ts", ".tsx", ".astro",
+                         ".vue", ".svelte", ".php", ".py", ".rb", ".go")):
+            try:
+                if os.path.getsize(path) <= MAX_FILE_BYTES:
+                    with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                        ftext = fh.read().lower()
+                    if ("turnstile" in ftext or "cf-challenge" in ftext
+                            or "__cf_chl" in ftext):
+                        turnstile_refs.append(rel)
+                    if "siteverify" in ftext:
+                        siteverify_found = True
+            except OSError:
+                pass
+    findings = []
+    if not web:
+        return findings
+    mw_rate, mw_origin, mw_text = _middleware_coverage(middleware_files)
+    route_texts: list = []
+    for rel, value in csp_values:
+        if _csp_is_weak(value):
+            findings.append(_web_finding(
+                "WEB006", rel,
+                "Content-Security-Policy allows script-src unsafe-inline with "
+                "no hash, nonce, or strict-dynamic mitigation: " + value[:160]))
+        if not _csp_has_reporting(value):
+            findings.append(_web_finding(
+                "WEB007", rel,
+                "Content-Security-Policy has no report-uri / report-to directive: "
+                + value[:160]))
+    for rel, value in hsts_values:
+        problems = _hsts_problems(value)
+        if problems:
+            findings.append(_web_finding(
+                "WEB008", rel,
+                "Strict-Transport-Security value is weak (" + "; ".join(problems)
+                + "): " + value[:160]))
+    if not headers_ok:
+        findings.append(_web_finding(
+            "WEB001", ".",
+            "No security-headers config found (_headers, vercel.json, "
+            "netlify.toml, or next.config headers) - HSTS, CSP, nosniff "
+            "and frame-ancestors are unenforced."))
+    for path, rel in api_files:
+        try:
+            if os.path.getsize(path) > MAX_FILE_BYTES:
+                continue
+            with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        if not _WEB_POST_RE.search(text):
+            continue
+        route_texts.append(text)
+        covered_rate = bool(_WEB_RATE_RE.search(text)) or _mw_covers(mw_rate, rel)
+        covered_origin = bool(_WEB_ORIGIN_RE.search(text)) or _mw_covers(mw_origin, rel)
+        if not covered_rate:
+            findings.append(_web_finding(
+                "WEB004", rel,
+                "State-changing route handler with no rate-limiting signal "
+                "(ratelimit/throttle/quota) in the file or in covering middleware."))
+        if not covered_origin:
+            findings.append(_web_finding(
+                "WEB005", rel,
+                "State-changing route handler with no Origin/Referer/CSRF "
+                "check signal in the file or in covering middleware."))
+    if api_files:
+        corpus = "\n".join([mw_text] + route_texts)
+        if not _BASELINE_AUTH_RE.search(corpus):
+            findings.append(_web_finding(
+                "WEB009", ".",
+                "API routes exist but no single authentication gate (withAuth, "
+                "requireAuth, authenticate, verifyToken, ...) was found in "
+                "middleware or route files."))
+        if not _BASELINE_ERROR_RE.search(corpus):
+            findings.append(_web_finding(
+                "WEB010", ".",
+                "API routes exist but no global error handler (onError, "
+                "handleError, window.onerror, uncaughtException, ...)."))
+        if not _BASELINE_LOG_RE.search(corpus):
+            findings.append(_web_finding(
+                "WEB011", ".",
+                "API routes exist but no structured logging signal (logger.*, "
+                "console.*, Sentry/captureException) was found."))
+        if not _BASELINE_BOUNDS_RE.search(corpus):
+            findings.append(_web_finding(
+                "WEB012", ".",
+                "API routes exist but no request size/duration bound (bodyLimit, "
+                "maxBodySize, maxDuration, timeout) was found."))
+    if turnstile_refs and not siteverify_found:
+        findings.append(_web_finding(
+            "WEB013", turnstile_refs[0],
+            "Bot-challenge widget (Turnstile/Cloudflare challenge) is embedded "
+            "but no server-side siteverify call was found - client-side-only "
+            "checks are theater; verify the token server-side."))
+    return findings
+
+
+def scan_git_history(root: str, excludes: "Optional[list]" = None, timeout: int = 300, pii_allow: list = None) -> list:
     """Scans every commit reachable from any ref (`git log -p --all`) for
     secret-shaped findings, catching what a working-tree scan can't: a
     secret added and later removed from HEAD is still fully recoverable from
@@ -210,6 +617,8 @@ def _scan_history_line(findings: list, file_path: str, line_no: int, text: str,
             for match in pattern.finditer(text):
                 if rule.check_reserved_suffix and RESERVED_SUFFIX_RE.search(match.group(0)):
                     continue
+                if rule.id == "PII001" and pii_allow and _pii_allowed(match.group(0), pii_allow):
+                    continue
                 if rule.value_group:
                     value = match.group(rule.value_group) or ""
                     if PLACEHOLDER_RE.search(value):
@@ -256,6 +665,14 @@ def engine_availability() -> dict:
     }
 
 
+def _engine_timeout(conf) -> int:
+    """Per-engine subprocess bound (seconds). Hung binaries must not hang the whole pipeline run - TimeoutExpired is an Exception subclass, so each runner\'s existing `except Exception` already converts it into a logged skip. Override per tool via `<tool>: {timeout: N}` in compliance_config.yaml."""
+    try:
+        return int((conf or {}).get("timeout", 600))
+    except (ValueError, TypeError):
+        return 600
+
+
 # --- Checkov Scanner ---
 def run_checkov(target_dir: str, conf: dict, mapping_data: dict) -> List[UnifiedFinding]:
     if not conf.get("enabled"): return []
@@ -276,7 +693,7 @@ def run_checkov(target_dir: str, conf: dict, mapping_data: dict) -> List[Unified
         # argument only executes cmd[0] via the shell on POSIX (the rest
         # become the shell's own $1, $2... rather than checkov's argv) -
         # silently broken on POSIX regardless of whether checkov is present.
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore', env=env)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore', env=env, timeout=_engine_timeout(conf))
         if not result.stdout.strip():
             return []
 
@@ -336,7 +753,7 @@ def run_semgrep(target_dir: str, conf: dict, mapping_data: dict) -> List[Unified
         env = os.environ.copy()
         env.pop("SEMGREP_APP_TOKEN", None)
 
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore', env=env)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore', env=env, timeout=_engine_timeout(conf))
         if not result.stdout.strip():
             return []
 
@@ -367,6 +784,29 @@ def run_semgrep(target_dir: str, conf: dict, mapping_data: dict) -> List[Unified
 
 
 # --- Trivy Scanner ---
+def _trivy_vuln_to_finding(vuln: dict, ref: str, mapping_data: dict) -> "UnifiedFinding":
+    """One Trivy JSON vuln entry -> normalized finding. Shared by the
+    fs and image scans so both report identical shapes."""
+    rule_id = vuln.get("VulnerabilityID", "DEP_VULN")
+    severity = vuln.get("Severity", "MEDIUM")
+    if severity == "UNKNOWN":
+        severity = "LOW"
+    finding = UnifiedFinding(
+        tool="Trivy",
+        rule_id=rule_id,
+        name=f"Vulnerability in {vuln.get('PkgName')}",
+        severity=severity,
+        file=ref,
+        line=0,
+        snippet=f"Installed version: {vuln.get('InstalledVersion')}, Fixed version: {vuln.get('FixedVersion')}",
+        remediation=vuln.get("PrimaryURL", "")
+    )
+    finding.frameworks = mapping_data.get("mappings", {}).get(rule_id, [])
+    if not finding.frameworks:
+        finding.frameworks = mapping_data.get("mappings", {}).get("DEP_VULN", ["SOC2:CC8.1", "NIST:CM-3"])
+    return finding
+
+
 def run_trivy(target_dir: str, conf: dict, mapping_data: dict) -> List[UnifiedFinding]:
     if not conf.get("enabled"): return []
     if not _tool_available("trivy"):
@@ -376,36 +816,34 @@ def run_trivy(target_dir: str, conf: dict, mapping_data: dict) -> List[UnifiedFi
     findings = []
     try:
         cmd = ["trivy", "fs", "--format", "json", target_dir]
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore', timeout=_engine_timeout(conf))
         if not result.stdout.strip():
-            return []
-        
-        data = json.loads(result.stdout)
+            data = {"Results": []}
+        else:
+            data = json.loads(result.stdout)
         results = data.get("Results", [])
         for res in results:
             target = res.get("Target", "")
             vulns = res.get("Vulnerabilities", [])
             for vuln in vulns:
-                rule_id = vuln.get("VulnerabilityID", "DEP_VULN")
-                severity = vuln.get("Severity", "MEDIUM")
-                if severity == "UNKNOWN":
-                    severity = "LOW"
-                finding = UnifiedFinding(
-                    tool="Trivy",
-                    rule_id=rule_id,
-                    name=f"Vulnerability in {vuln.get('PkgName')}",
-                    severity=severity,
-                    file=os.path.join(target_dir, target),
-                    line=0,
-                    snippet=f"Installed version: {vuln.get('InstalledVersion')}, Fixed version: {vuln.get('FixedVersion')}",
-                    remediation=vuln.get("PrimaryURL", "")
-                )
-                finding.frameworks = mapping_data.get("mappings", {}).get(rule_id, [])
-                if not finding.frameworks:
-                    finding.frameworks = mapping_data.get("mappings", {}).get("DEP_VULN", ["SOC2:CC8.1", "NIST:CM-3"])
-                findings.append(finding)
+                findings.append(_trivy_vuln_to_finding(
+                    vuln, os.path.join(target_dir, target), mapping_data))
     except Exception as e:
         print(f"Trivy failed: {e}", file=sys.stderr)
+    for image in conf.get("images", []) or []:
+        try:
+            cmd = ["trivy", "image", "--format", "json", image]
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='ignore', timeout=_engine_timeout(conf))
+            if not result.stdout.strip():
+                continue
+            data = json.loads(result.stdout)
+            for res in data.get("Results", []):
+                target = res.get("Target", "")
+                for vuln in res.get("Vulnerabilities", []) or []:
+                    findings.append(_trivy_vuln_to_finding(
+                        vuln, f"{image} ({target})", mapping_data))
+        except Exception as e:
+            print(f"Trivy image {image} failed: {e}", file=sys.stderr)
     return findings
 
 
@@ -428,12 +866,20 @@ def _parse_package_json(path: str) -> List[tuple]:
     out = []
     with open(path, "r", encoding="utf-8") as f:
         pkg_data = json.load(f)
-    dependencies = pkg_data.get("dependencies", {})
-    devDependencies = pkg_data.get("devDependencies", {})
-    for pkg, ver in {**dependencies, **devDependencies}.items():
-        clean_ver = "".join(c for c in ver if c.isdigit() or c == "." or c == "-")
-        if len(clean_ver) >= 1:
-            out.append((pkg, clean_ver))
+    for section, scope in (("dependencies", "prod"),
+                           ("peerDependencies", "prod"),
+                           ("optionalDependencies", "prod"),
+                           ("devDependencies", "dev")):
+        for pkg, ver in (pkg_data.get(section, {}) or {}).items():
+            clean_ver = "".join(c for c in str(ver)
+                                if c.isdigit() or c == "." or c == "-")
+            if len(clean_ver) < 1:
+                continue
+            known = [i for i, (p, _v, _s) in enumerate(out) if p == pkg]
+            if known:
+                out[known[0]] = (pkg, clean_ver, scope)
+            else:
+                out.append((pkg, clean_ver, scope))
     return out
 
 
@@ -526,9 +972,132 @@ def _parse_composer_lock(path: str) -> List[tuple]:
 
 
 # filename -> (parser, OSV ecosystem name)
+_NPM_LOCKFILES = frozenset({"package-lock.json", "pnpm-lock.yaml", "yarn.lock"})
+
+
+def _split_pkg(item):
+    """(pkg, ver, scope) for 2- or 3-tuples. Lockfile parsers know the
+    scope (prod/dev/transitive); manifest parsers mostly do not, so they
+    stay 2-tuples and land here as "unknown" (field report §3.5)."""
+    if len(item) > 2:
+        return item[0], item[1], item[2]
+    return item[0], item[1], "unknown"
+
+
+_SBOM_SCOPE = {"prod": "required", "transitive": "required",
+               "dev": "optional", "unknown": "required"}
+
+
+def _parse_package_lock(path: str) -> List[tuple]:
+    """npm package-lock.json: exact RESOLVED versions, not manifest ranges.
+    v2/v3 `packages` map (keys node_modules/<name>) carries per-entry dev
+    flags; the v1 `dependencies` map does too. Root devDependencies names
+    are always dev. Nested node_modules copies are transitive. Returns
+    (pkg, ver, scope) triples (field report §3.5)."""
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    root = (data.get("packages") or {}).get("", {})
+    dev_names = set((root.get("devDependencies") or {}))
+    out = []
+    packages = data.get("packages") or {}
+    if packages:
+        for key, entry in packages.items():
+            if not key or not isinstance(entry, dict):
+                continue
+            if not key.startswith("node_modules/"):
+                continue  # workspace root / link entry, not a dependency
+            if key.count("node_modules/") > 1:
+                name = key.rsplit("node_modules/", 1)[-1]
+                scope = "transitive"
+            else:
+                name = key[len("node_modules/"):]
+                scope = ("dev" if (entry.get("dev") or name in dev_names)
+                         else "prod")
+            ver = entry.get("version")
+            if name and ver:
+                out.append((name, str(ver), scope))
+    else:
+        for name, entry in (data.get("dependencies") or {}).items():
+            if not isinstance(entry, dict):
+                continue
+            ver = entry.get("version")
+            if not ver:
+                continue
+            scope = ("dev" if (entry.get("dev") or name in dev_names)
+                     else "prod")
+            out.append((name, str(ver), scope))
+    return out
+
+
+def _parse_yarn_lock(path: str) -> List[tuple]:
+    """Yarn classic (v1) lockfile: `"name@range[, ...]":` headers followed
+    by `  version "x.y.z"` lines. Quote-aware so berry (unquoted) headers
+    and `version:` lines are skipped, not misread. Scope is not recorded
+    in yarn v1 lockfiles - "unknown" (dev is resolved from a sibling
+    package.json by the collector). No quote literals needed: QM covers
+    both quote styles without embedding them."""
+    out = []
+    name = None
+    QM = chr(34) + chr(39)
+    with open(path, "r", encoding="utf-8") as f:
+        for raw in f:
+            line = raw.rstrip("\r\n")
+            if not line or line[0] in " \t":
+                if name:
+                    stripped = line.strip()
+                    if stripped.startswith("version"):
+                        rest = stripped[len("version"):].strip()
+                        if rest[:1] in QM:
+                            out.append((name, rest.strip(QM), "unknown"))
+                    name = None
+                continue
+            stripped = line.strip()
+            if stripped[:1] in QM and stripped.endswith(":"):
+                header = stripped[:-1]
+                first = header.split(",", 1)[0].strip().strip(QM)
+                if "@" in first:
+                    parts = first.split("@")
+                    if first.startswith("@"):
+                        name = "@" + parts[1] if len(parts) > 2 else None
+                    else:
+                        name = parts[0] or None
+                else:
+                    name = None
+            else:
+                name = None
+    return out
+
+
+def _parse_pnpm_lock(path: str) -> List[tuple]:
+    """pnpm-lock.yaml via PyYAML (already a project dependency): the
+    `packages:` map keys look like `/pkg@1.2.3:` (peer suffixes in
+    parens are stripped); dev scope comes from the `importers`
+    devDependencies (field report §3.5)."""
+    import yaml
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    dev_names = set()
+    for importer in (data.get("importers") or {}).values():
+        if isinstance(importer, dict):
+            dev_names.update((importer.get("devDependencies") or {}))
+    out = []
+    for key, entry in (data.get("packages") or {}).items():
+        if not isinstance(key, str) or "@" not in key:
+            continue
+        base = key.lstrip("/").split("(", 1)[0]
+        name, _, ver = base.rpartition("@")
+        if not name or not ver:
+            continue
+        out.append((name, ver, "dev" if name in dev_names else "prod"))
+    return out
+
+
 _LOCKFILE_PARSERS = {
     "requirements.txt": (_parse_requirements_txt, "PyPI"),
     "package.json": (_parse_package_json, "npm"),
+    "package-lock.json": (_parse_package_lock, "npm"),
+    "pnpm-lock.yaml": (_parse_pnpm_lock, "npm"),
+    "yarn.lock": (_parse_yarn_lock, "npm"),
     "Cargo.lock": (_parse_cargo_lock, "crates.io"),
     "go.sum": (_parse_go_sum, "Go"),
     "Gemfile.lock": (_parse_gemfile_lock, "RubyGems"),
@@ -559,7 +1128,7 @@ def run_cargo_audit(target_dir: str, conf: dict, mapping_data: dict) -> List[Uni
         try:
             cmd = ["cargo", "audit", "--json", "--file", lockfile]
             result = subprocess.run(cmd, capture_output=True, text=True,
-                                     encoding="utf-8", errors="ignore")
+                                     encoding="utf-8", errors="ignore", timeout=_engine_timeout(conf))
             if not result.stdout.strip():
                 continue
             data = json.loads(result.stdout)
@@ -605,18 +1174,23 @@ def run_dependency_audit(target_dir: str, conf: dict, mapping_data: dict) -> Lis
     findings = []
     for dirpath, dirnames, filenames in os.walk(target_dir):
         dirnames[:] = [d for d in dirnames if d.lower() not in SKIP_DIRS]
+        npm_lock = bool(set(filenames) & _NPM_LOCKFILES)
         for fname in filenames:
             parser_info = _LOCKFILE_PARSERS.get(fname)
             if not parser_info:
                 continue
+            if fname == "package.json" and npm_lock:
+                continue  # lockfile pins resolved versions; manifest ranges would double-count (§3.5)
             parser, ecosystem = parser_info
             file_path = os.path.join(dirpath, fname)
+            if fname == "package.json" and not npm_lock:
+                print(f"OSV: {file_path} has no lockfile sibling - versions are manifest ranges, not resolved", file=sys.stderr)
             try:
                 packages = parser(file_path)
             except Exception as e:
                 print(f"Error parsing {file_path}: {e}", file=sys.stderr)
                 continue
-            for pkg, ver in packages:
+            for pkg, ver, _scope in (_split_pkg(p) for p in packages):
                 findings.extend(_query_osv(pkg, ver, ecosystem, file_path, target_dir, mapping_data))
     return findings
 
@@ -735,18 +1309,62 @@ def _dast_auth_headers() -> dict:
 
 
 def _header_findings(url: str, headers, mapping_data: dict) -> List[UnifiedFinding]:
-    """HSTS/CSP/server-leak header checks for one fetched URL."""
+    """HSTS/CSP/server-leak header checks for one fetched URL, plus value
+    grading (weak HSTS, weak CSP, missing CSP reporting) and the remaining
+    expected security headers (field report §4 rows 15, 16, 20, 21).
+    Lookup is case-insensitive: live responses are case-insensitive but
+    test doubles are plain dicts."""
     out = []
     try:
         names = list(headers.keys())
     except Exception:
         return out
-    if "Strict-Transport-Security" not in headers:
-        out.append(_create_network_finding("NET_HSTS_MISSING", "Missing HSTS Header", "HIGH", url, f"Found Headers: {names[:5]}...", "Ensure Strict-Transport-Security is set to enforce TLS.", mapping_data))
-    if "Content-Security-Policy" not in headers:
-        out.append(_create_network_finding("NET_CSP_MISSING", "Missing CSP Header", "MEDIUM", url, "", "Add Content-Security-Policy header to prevent XSS.", mapping_data))
     try:
-        server_leak = headers.get("Server") or headers.get("X-Powered-By")
+        lowered = {str(k).lower(): headers[k] for k in names}
+    except Exception:
+        lowered = {}
+
+    def _get(name: str):
+        try:
+            value = headers.get(name)
+        except Exception:
+            value = None
+        if value is None:
+            value = lowered.get(name.lower())
+        return value
+
+    hsts = _get("Strict-Transport-Security")
+    if not hsts:
+        out.append(_create_network_finding("NET_HSTS_MISSING", "Missing HSTS Header", "HIGH", url, f"Found Headers: {names[:5]}...", "Ensure Strict-Transport-Security is set to enforce TLS.", mapping_data))
+    else:
+        problems = _hsts_problems(str(hsts))
+        if problems:
+            out.append(_create_network_finding("NET_HSTS_WEAK", "Weak HSTS Value", "LOW", url, "Strict-Transport-Security: " + str(hsts)[:200], "Use max-age=31536000 (one year) or longer plus includeSubDomains and preload (then submit to hstspreload.org); see ASVS V3.4.1.", mapping_data))
+    csp = _get("Content-Security-Policy")
+    if not csp:
+        out.append(_create_network_finding("NET_CSP_MISSING", "Missing CSP Header", "MEDIUM", url, "", "Add Content-Security-Policy header to prevent XSS.", mapping_data))
+    else:
+        csp_text = str(csp)
+        if _csp_is_weak(csp_text):
+            out.append(_create_network_finding("NET_CSP_WEAK", "Weak CSP Value", "MEDIUM", url, "Content-Security-Policy: " + csp_text[:200], "Remove unsafe-inline from script-src (hash or nonce every script) or add strict-dynamic with nonces; see ASVS V3.4.3.", mapping_data))
+        if not _csp_has_reporting(csp_text):
+            out.append(_create_network_finding("NET_CSP_NO_REPORT", "CSP Without Violation Reporting", "LOW", url, "Content-Security-Policy: " + csp_text[:200], "Add a report-uri / report-to directive and monitor the endpoint; see ASVS V3.4.7.", mapping_data))
+    for header, rule_id, title, fix in (
+        ("Permissions-Policy", "NET_PERMISSIONS_POLICY_MISSING", "Missing Permissions-Policy Header", "Set a Permissions-Policy header to disable unneeded powerful features (camera, geolocation, etc.); see ASVS V3.4.4."),
+        ("Referrer-Policy", "NET_REFERRER_POLICY_MISSING", "Missing Referrer-Policy Header", "Set a Referrer-Policy (e.g. no-referrer or strict-origin-when-cross-origin); see ASVS V3.4.5."),
+        ("Cross-Origin-Opener-Policy", "NET_COOP_MISSING", "Missing Cross-Origin-Opener-Policy Header", "Set Cross-Origin-Opener-Policy: same-origin to isolate the browsing context; see ASVS V3.4.6."),
+        ("X-Content-Type-Options", "NET_XCTO_MISSING", "Missing X-Content-Type-Options Header", "Set X-Content-Type-Options: nosniff to block MIME sniffing; see ASVS V3.4.8."),
+    ):
+        if not _get(header):
+            out.append(_create_network_finding(rule_id, title, "LOW", url, "", fix, mapping_data))
+    report_only = _get("Content-Security-Policy-Report-Only")
+    csp_all = " ".join(s for s in (str(csp) if csp else "",
+                                    str(report_only) if report_only else "")
+                        if s).lower()
+    if not _get("X-Frame-Options") and "frame-ancestors" not in csp_all:
+        out.append(_create_network_finding("NET_FRAME_ANCESTORS_MISSING", "Clickjacking Protection Missing", "LOW", url, "", "Set X-Frame-Options: DENY/SAMEORIGIN or a CSP frame-ancestors directive; see ASVS V3.4.2.", mapping_data))
+    try:
+        server_leak = _get("Server") or _get("X-Powered-By")
     except Exception:
         server_leak = None
     if server_leak:
@@ -1005,7 +1623,19 @@ def _create_network_finding(rule_id: str, name: str, severity: str, file_path: s
 # --- Email authentication (SPF/DKIM/DMARC, R-055) ---
 _PLACEHOLDER_EMAIL_DOMAINS = frozenset({"example.com", "example.org", "example.net"})
 _RESERVED_HOST_SUFFIX_RE = re.compile(
-    r"\.(test|example|invalid|localhost|local|internal|ipc)$", re.IGNORECASE)
+    r"(^|\.)(test|example|invalid|localhost|local|internal|ipc)$", re.IGNORECASE)
+
+
+def _is_ip_literal(host: str) -> bool:
+    """True for IPv4/IPv6 literals (field report §3.4): DAST targets
+    like http://127.0.0.1:4400 derive a "domain" that must never be
+    DNS-probed for SPF/DKIM/DMARC. stdlib ipaddress, no new dep."""
+    try:
+        import ipaddress
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
 
 
 def _dns_txt_records(name: str, timeout: int = 10) -> List[str]:
@@ -1045,7 +1675,9 @@ def run_email_auth_audit(domains: list, mapping_data: dict,
     """
     if not domains:
         return []
-    selectors = selectors or ["default", "google", "selector1", "selector2", "k1"]
+    selectors = selectors or ["default", "google", "selector1", "selector2", "k1",
+                            "resend", "s1", "s2", "mandrill", "pm",
+                            "amazonses", "mxvault"]
     findings = []
     for raw in domains:
         domain = (raw or "").strip().lower().rstrip(".")
@@ -1054,6 +1686,8 @@ def run_email_auth_audit(domains: list, mapping_data: dict,
         if domain in _PLACEHOLDER_EMAIL_DOMAINS or domain.endswith(".example.com"):
             continue
         if _RESERVED_HOST_SUFFIX_RE.search(domain):
+            continue
+        if _is_ip_literal(domain):
             continue
         print(f"Checking email auth records for {domain}...", file=sys.stderr)
         txts = _dns_txt_records(domain, timeout)
@@ -1129,8 +1763,8 @@ def _poll_aws() -> "tuple[list, str]":
                     uri = grant.get("Grantee", {}).get("URI", "")
                     # soc2-ignore: AWS canonical S3 grantee URIs - the http scheme is AWS-defined
                     # and must match ACL responses exactly; not a cleartext-protocol choice.
-                    if uri in ("http://acs.amazonaws.com/groups/global/AllUsers",  # soc2-ignore
-                               "http://acs.amazonaws.com/groups/global/AuthenticatedUsers"):  # soc2-ignore
+                    if uri in ("http://acs.amazonaws.com/groups/global/AllUsers",  # soc2-ignore: AWS canonical grantee URI, must match ACL responses exactly
+                               "http://acs.amazonaws.com/groups/global/AuthenticatedUsers"):  # soc2-ignore: AWS canonical grantee URI, must match ACL responses exactly
                         public = True
                         details.append(f"public ACL grant: {grant.get('Permission')}")
             except Exception as e:
@@ -1374,12 +2008,17 @@ def _collect_sbom_components(target_dir: str) -> "tuple[list, str]":
     project_license = ""
     for dirpath, dirnames, filenames in os.walk(target_dir):
         dirnames[:] = [d for d in dirnames if d.lower() not in SKIP_DIRS]
+        npm_lock = bool(set(filenames) & _NPM_LOCKFILES)
         for fname in filenames:
             parser_info = _LOCKFILE_PARSERS.get(fname)
             if not parser_info:
                 continue
+            if fname == "package.json" and npm_lock:
+                continue  # lockfile pins resolved versions; manifest ranges would double-count (§3.5)
             parser, ecosystem = parser_info
             file_path = os.path.join(dirpath, fname)
+            if fname == "package.json" and not npm_lock:
+                print(f"SBOM: {file_path} has no lockfile sibling - versions are manifest ranges, not resolved", file=sys.stderr)
             try:
                 packages = parser(file_path)
             except Exception as e:
@@ -1394,7 +2033,7 @@ def _collect_sbom_components(target_dir: str) -> "tuple[list, str]":
                         project_license = str(top) if isinstance(top, str) else top.get("type", "")
                 except Exception:
                     pass
-            for pkg, ver in packages:
+            for pkg, ver, scope in (_split_pkg(p) for p in packages):
                 key = (ecosystem, pkg, ver)
                 if key in seen:
                     continue
@@ -1402,6 +2041,7 @@ def _collect_sbom_components(target_dir: str) -> "tuple[list, str]":
                 components.append({
                     "name": pkg, "version": ver, "ecosystem": ecosystem,
                     "license": declared.get(pkg, "unknown"),
+                    "scope": _SBOM_SCOPE.get(scope, "required"),
                     "file": os.path.relpath(file_path, target_dir),
                 })
     components.sort(key=lambda c: (c["ecosystem"], c["name"], c["version"]))
@@ -1413,7 +2053,8 @@ def _write_sbom(components: list, project_license: str, sbom_conf: dict,
     """Writes CycloneDX (default) or minimal SPDX JSON. Returns the path."""
     fmt = str(sbom_conf.get("format", "cyclonedx")).lower()
     default_name = ("sbom.spdx.json" if fmt == "spdx" else "sbom.cyclonedx.json")
-    out_path = sbom_conf.get("output", os.path.join("reports", default_name))
+    out_path = (sbom_conf.get("output")
+                or os.path.join(target_dir, "reports", default_name))
     if fmt == "spdx":
         doc = {
             "spdxVersion": "SPDX-2.3",
@@ -1437,7 +2078,7 @@ def _write_sbom(components: list, project_license: str, sbom_conf: dict,
                          "note": _EU_CRA_NOTE},
             "components": [
                 {"type": "library", "name": c["name"], "version": c["version"],
-                 "scope": "required", "ecosystem": c["ecosystem"],
+                 "scope": c["scope"], "ecosystem": c["ecosystem"],
                  "licenses": ([] if c["license"] == "unknown"
                               else [{"license": {"id": c["license"]}}])}
                 for c in components
@@ -1592,8 +2233,8 @@ def run_nuclei(targets: list, mapping_data: dict,
             cmd = ["nuclei", "-u", target, "-jsonl", "-silent", "-nc"]
             if sev_filter:
                 cmd.extend(["-severity", sev_filter])
-            result = subprocess.run(cmd, capture_output=True, text=True,
-                                    encoding="utf-8", errors="ignore")
+            result = subprocess.run(cmd, capture_output=True, text=True,
+                                    encoding="utf-8", errors="ignore", timeout=_engine_timeout(conf))
             for line in result.stdout.splitlines():
                 line = line.strip()
                 if not line:
@@ -1609,7 +2250,173 @@ def run_nuclei(targets: list, mapping_data: dict,
     return findings
 
 
-# --- OpenSSF Scorecard (supply-chain posture, incl. SLSA-relevant checks) ---
+# --- TLS / cipher posture (protocol pillar; stdlib ssl, no new binary) ---
+_TLS_WEAK_CIPHER_RE = re.compile(
+    r"RC4|DES-CBC|_DES_|3DES|MD5|NULL|anon|ADH|AECDH|EXPORT|aNULL|eNULL",
+    re.IGNORECASE,
+)
+_TLS_WEAK_VERSIONS = frozenset({"SSLv2", "SSLv3", "TLSv1", "TLSv1.1"})
+_TLS_PLACEHOLDER_HOSTS = frozenset({"example.com", "api.example.com"})
+_TLS_EXPIRY_SOON_DAYS = 30
+
+
+def _tls_hostport(target: str):
+    """(host, port) for a network_targets entry, or None for placeholders
+    and unparseable values - mirrors run_network_audit's placeholder skip."""
+    t = (target or "").strip()
+    if not t or t in PLACEHOLDER_NETWORK_TARGETS:
+        return None
+    t = re.sub(r"^https?://", "", t, flags=re.IGNORECASE).split("/")[0]
+    if "@" in t:
+        return None
+    if ":" in t:
+        host, _, port = t.rpartition(":")
+        try:
+            port_n = int(port)
+        except ValueError:
+            return None
+    else:
+        host, port_n = t, 443
+    host = host.strip().lower().strip("[]")
+    if not host or host in _TLS_PLACEHOLDER_HOSTS:
+        return None
+    return host, port_n
+
+
+def _tls_finding(rule_id: str, name: str, severity: str, target: str,
+                 snippet: str, mapping_data: dict, remediation: str) -> UnifiedFinding:
+    finding = UnifiedFinding(tool="TLS", rule_id=rule_id, name=name,
+                             severity=severity, file=target, line=0,
+                             snippet=snippet, remediation=remediation)
+    finding.frameworks = mapping_data.get("mappings", {}).get(rule_id, [])
+    return finding
+
+
+def _cert_matches_host(cert: dict, host: str) -> bool:
+    """Explicit hostname check (ssl.match_hostname was removed in 3.12).
+    SAN dNSName entries first, CN fallback; leading wildcard matches one
+    label; IP literals match iPAddress SANs. No names at all means the
+    endpoint cannot be authenticated - report mismatch."""
+    import ipaddress as _ip
+    host = (host or "").lower().rstrip(".")
+    try:
+        host_ip = _ip.ip_address(host)
+    except ValueError:
+        host_ip = None
+    names = []
+    for typ, val in cert.get("subjectAltName", ()) or []:
+        t = str(typ).lower()
+        if t == "dns":
+            names.append(("dns", str(val).lower().rstrip(".")))
+        elif t == "ipaddress":
+            names.append(("ip", str(val)))
+    if not names:
+        for rdn in cert.get("subject", ()) or []:
+            for key, val in rdn:
+                if str(key).lower() == "commonname":
+                    names.append(("dns", str(val).lower().rstrip(".")))
+    if not names:
+        return False
+    for kind, pattern in names:
+        if kind == "ip":
+            try:
+                if host_ip is not None and _ip.ip_address(pattern) == host_ip:
+                    return True
+            except ValueError:
+                continue
+        elif pattern.startswith("*."):
+            if host.count(".") == pattern.count(".") and host.endswith(pattern[1:]):
+                return True
+        elif host == pattern:
+            return True
+    return False
+
+
+def run_tls_audit(targets: list, mapping_data: dict,
+                  tls_conf: "Optional[dict]" = None) -> List[UnifiedFinding]:
+    """TLS posture per host: negotiated version, cipher strength, certificate
+    expiry and hostname match - stdlib ssl only, so there is no new binary
+    to install. Placeholder example.com defaults are never dialed (R-036).
+    Unreachable hosts skip with a stderr note; only established handshakes
+    can produce findings."""
+    conf = tls_conf or {}
+    if not conf.get("enabled", True):
+        return []
+    try:
+        timeout = int(conf.get("timeout", 10))
+    except (ValueError, TypeError):
+        timeout = 10
+    findings = []
+    for target in targets or []:
+        hp = _tls_hostport(target)
+        if hp is None:
+            continue
+        host, port = hp
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = True
+            with socket.create_connection((host, port), timeout=timeout) as raw:
+                try:
+                    raw_sock = ctx.wrap_socket(raw, server_hostname=host)
+                except ssl.CertificateError:
+                    findings.append(_tls_finding(
+                        "TLS_CERT_HOSTNAME_MISMATCH", "Certificate hostname mismatch",
+                        "HIGH", target, f"{label} certificate does not match the host.",
+                        mapping_data, f"Serve a certificate valid for {host} "
+                        "(SAN entry); clients cannot authenticate this endpoint."))
+                    continue
+                with raw_sock as sock:
+                    version = sock.version() or ""
+                    cipher = (sock.cipher() or [None])[0] or ""
+                    cert = sock.getpeercert() or {}
+        except (OSError, ssl.SSLError) as exc:
+            print(f"TLS audit skipped for {host}:{port}: {exc}", file=sys.stderr)
+            continue
+        label = f"{host}:{port}"
+        if version in _TLS_WEAK_VERSIONS:
+            findings.append(_tls_finding(
+                "TLS_WEAK_VERSION", f"Legacy {version} negotiated", "HIGH",
+                target, f"{label} negotiated {version}; require TLS 1.2+.",
+                mapping_data, f"Disable {version} on {label}; enforce TLS 1.2 "
+                "or higher on every listener."))
+        if _TLS_WEAK_CIPHER_RE.search(cipher):
+            findings.append(_tls_finding(
+                "TLS_WEAK_CIPHER", f"Weak cipher {cipher}", "HIGH",
+                target, f"{label} negotiated cipher {cipher}.",
+                mapping_data, f"Remove {cipher} from {label}'s cipher list; "
+                "prefer AEAD suites (AES-GCM/ChaCha20-Poly1305)."))
+        not_after = (cert.get("notAfter", "") or "").strip()
+        if not_after:
+            try:
+                import datetime as _dt
+                remaining = (_dt.datetime.fromtimestamp(
+                    ssl.cert_time_to_seconds(not_after),
+                    tz=_dt.timezone.utc) - _dt.datetime.now(_dt.timezone.utc))
+                if remaining.total_seconds() <= 0:
+                    findings.append(_tls_finding(
+                        "TLS_CERT_EXPIRED", "Certificate expired", "CRITICAL",
+                        target, f"{label} certificate expired {not_after}.",
+                        mapping_data, f"Replace the expired certificate on "
+                        f"{label} immediately and automate renewal."))
+                elif remaining.days < _TLS_EXPIRY_SOON_DAYS:
+                    findings.append(_tls_finding(
+                        "TLS_CERT_EXPIRING_SOON", "Certificate expiring soon",
+                        "MEDIUM", target, f"{label} certificate expires "
+                        f"{not_after} ({remaining.days}d).",
+                        mapping_data, f"Renew the {label} certificate before "
+                        "expiry; automate renewal with monitoring."))
+            except (ValueError, OSError):
+                pass
+        if not _cert_matches_host(cert, host):
+            findings.append(_tls_finding(
+                "TLS_CERT_HOSTNAME_MISMATCH", "Certificate hostname mismatch",
+                "HIGH", target, f"{label} certificate does not match the host.",
+                mapping_data, f"Serve a certificate valid for {host} "
+                "(SAN entry); clients cannot authenticate this endpoint."))
+    return findings
+
+
+# --- OpenSSF Scorecard \(supply-chain posture, incl\. SLSA-relevant checks\) ---
 _GITHUB_REMOTE_RE = re.compile(
     r"github\.com[:/](?P<slug>[^/]+/[^/]+?)(?:\.git)?\s*$", re.IGNORECASE)
 _SLSA_CHECKS = frozenset({"Signed-Releases", "Binary-Artifacts",
@@ -1660,8 +2467,8 @@ def run_scorecard(target_dir: str, conf: dict, mapping_data: dict) -> List[Unifi
     findings = []
     try:
         cmd = ["scorecard", f"--repo={slug}", "--format=json"]
-        result = subprocess.run(cmd, capture_output=True, text=True,
-                                encoding="utf-8", errors="ignore")
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding="utf-8", errors="ignore", timeout=_engine_timeout(conf))
         if not result.stdout.strip():
             return []
         data = json.loads(result.stdout)
@@ -1749,8 +2556,8 @@ def run_trufflehog(target_dir: str, conf: dict, mapping_data: dict) -> List[Unif
     findings = []
     try:
         cmd = ["trufflehog", "filesystem", target_dir, "--json", "--only-verified"]
-        result = subprocess.run(cmd, capture_output=True, text=True,
-                                encoding="utf-8", errors="ignore")
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding="utf-8", errors="ignore", timeout=_engine_timeout(conf))
         events = _trufflehog_events(result.stdout)
     except Exception as e:
         print(f"TruffleHog failed: {e}", file=sys.stderr)

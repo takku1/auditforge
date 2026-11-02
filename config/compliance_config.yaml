@@ -33,7 +33,8 @@ tools:
       - "p/secrets"
       - "p/default"
   trivy:
-    enabled: true 
+    enabled: true
+    images: []  # container images, e.g. ["myapp:latest"]
     # Requires local trivy binary (OSS)
     # Available at: https://github.com/aquasecurity/trivy
   osv:
@@ -93,6 +94,15 @@ email_auth:
   enabled: true      # SPF/DKIM/DMARC TXT checks for each network-target domain
   selectors: ["default", "google", "selector1", "selector2", "k1"]
   domains: []        # extra domains beyond network-target hosts
+
+# -----------------------------------------------------------------------------
+# TLS POSTURE - stdlib SSL handshake per network-target host: negotiated
+# version, cipher strength, certificate expiry and hostname match.
+# No new binary. Placeholder example.com defaults are never dialed.
+# -----------------------------------------------------------------------------
+tls:
+  enabled: true
+  timeout: 10          # per-host handshake timeout (also TLS_TIMEOUT)
 
 # -----------------------------------------------------------------------------
 # LIVE CLOUD POSTURE (R-051) - read-only polling, env creds only.

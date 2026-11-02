@@ -9,6 +9,32 @@ the ~47k-control knowledge base directly instead of an operator shelling out
 to CLIs and parsing text by hand.
 
 ## Active Focus
+2026-11-02 build-out complete: freshness pipeline (`check_freshness.py` +
+manifest + weekly workflow + `update_engines.py`), orchestrator hardening
+(parallel engines, per-engine timeouts, result cache, `run_status`),
+12-domain knowledge-driven gap analysis, TLS/cipher engine, WEB rule lane
+(5 rules), `pii_allow` + RFC 2606 bare-domain PII fixes, ASVS IDs on all 37
+rules, MCP `run_universal_audit`/`engine_status`, unified SARIF, finding
+ledger (`ledger.py`), security-audit skill + validators, native plugin
+(`plugin/auditforge/`, validated), hygiene gate green, full suite green.
+2026-11-02 hyper-build tail (R-125–R-129): Trivy container-image scanning
+(`images:` config, one shared fs/image finding helper), policy-doc
+coverage audit (`policy_audit.py` + 15-policy catalog + `audit_policy_docs`
+tool; self-run 14 present / 1 partial / 0 missing-must), `walk_target`
+hardened against unstatable entries (WinError 1920), MCP tools for
+gap/ledger/validators/freshness (16 tools total), plugin skill copies
+resynced and revalidated. Suite 323 green, self-audit 0 HIGH, hygiene
+exit 0.
+2026-11-02 field-test batch (R-130–R-135,
+`docs/field-test-seancarneywebsite-2026-11-02.md` P1–P6): new static rules
+WEB009 (method allowlist), WEB010 (same-origin), WEB011 (rate limit), WEB012
+(catch-all errors), WEB013 (Turnstile), PRIV001–003 (privacy lane),
+SEC010–012 (taint-lite: mail headers, timing compare, proto pollution),
+SUPPRESS001 (accountable suppressions), LLM004 (LLM HTML sink), plus
+CSP/HSTS value parsing (static + DAST), lockfile SBOM parsers, and DAST NET
+additions. Suite 368 green; scripts/docs/config HIGH gates all 0; hygiene
+exit 0. Self-triage along the way: WEB003 escalation off in `.md` prose,
+SEC011 case-insensitive, own suppressions justified.
 As of 2026-09-20 the ROADMAP's Ready table is down to four still-pending
 items, each with a cause: R-027 (HITRUST — genuinely blocked, no open
 machine-readable source exists), R-049 (freshness watch, no action yet —
@@ -202,4 +228,4 @@ Python deps live in a project-local `.venv/` — never the system Python.
   control data.
 
 ## Last Updated
-2026-09-20
+2026-11-02
