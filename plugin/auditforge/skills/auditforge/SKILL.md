@@ -214,7 +214,7 @@ suppresses only the failed claim.
 .venv/Scripts/python.exe scripts/ledger.py verdict --repo <n> --fingerprint <fp> --verdict confirmed --run-id v1 --reason "...; disproof tried: ...; failed because: ..." --verifier <id> --evidence <artifact>
 .venv/Scripts/python.exe scripts/ledger.py transitions --repo <n> --fingerprint <fp>
 .venv/Scripts/python.exe scripts/poc_sandbox.py check
-.venv/Scripts/python.exe scripts/poc_sandbox.py run --cmd "<poc>" --workdir <target> --outdir <artifacts> --record --repo <n> --fingerprint <fp> --run-id <id> --db <ledger.db> --verifier <id>
+.venv/Scripts/python.exe scripts/poc_sandbox.py run --cmd "<poc>" --workdir <target> --outdir <artifacts> --artifacts-root <repo>/reports --record --repo <n> --fingerprint <fp> --run-id <id> --db <ledger.db> --verifier <id>
 ```
 
 `--record` writes only `needs_validation`. Confirming is always a separate

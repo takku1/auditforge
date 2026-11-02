@@ -79,10 +79,18 @@ def test_refusal_when_daemon_down(stub, monkeypatch, tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["status"] == "refused"
 
 
+def _ws(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir(exist_ok=True)
+    root = tmp_path / "artifacts"
+    outdir = root / "out"
+    return str(target), str(root), str(outdir)
+
+
 def test_hardened_flags(stub, tmp_path):
-    outdir = tmp_path / "out"
-    res = poc_sandbox.run_poc(["id"], str(tmp_path), "img:test", 30,
-                              str(outdir))
+    target, root, outdir = _ws(tmp_path)
+    res = poc_sandbox.run_poc(["id"], target, "img:test", 30,
+                              outdir, artifacts_root=root)
     assert res["status"] == "completed"
     logged = (stub / "docker.log").read_text(encoding="utf-8")
     run_line = [l for l in logged.splitlines()
@@ -98,9 +106,9 @@ def test_hardened_flags(stub, tmp_path):
 
 def test_timeout_kills_container(stub, monkeypatch, tmp_path):
     monkeypatch.setenv("POC_STUB_SLEEP", "30")
-    outdir = tmp_path / "out"
-    res = poc_sandbox.run_poc(["sleep", "30"], str(tmp_path), "img:test",
-                              1, str(outdir))
+    target, root, outdir = _ws(tmp_path)
+    res = poc_sandbox.run_poc(["sleep", "30"], target, "img:test",
+                              1, outdir, artifacts_root=root)
     assert res["status"] == "timeout"
     logged = (stub / "docker.log").read_text(encoding="utf-8")
     assert "rm -f auditforge-poc-" in logged
@@ -132,12 +140,72 @@ def test_refusal_records_needs_validation(stub, monkeypatch, tmp_path,
     assert len(rows) == 1 and rows[0]["fingerprint"] == "fp1"
 
 
+def test_outdir_outside_root_refused(stub, tmp_path, capsys):
+    # Review finding 2: the writable mount stays under the approved root.
+    target, root, _ = _ws(tmp_path)
+    rc = poc_sandbox.main(["run", "--cmd", "id",
+                           "--workdir", target,
+                           "--outdir", str(tmp_path / "evil"),
+                           "--artifacts-root", root])
+    assert rc == 4
+    assert json.loads(capsys.readouterr().out)["status"] == "refused"
+
+
+def test_outdir_traversal_refused(stub, tmp_path, capsys):
+    target, root, _ = _ws(tmp_path)
+    rc = poc_sandbox.main(["run", "--cmd", "id",
+                           "--workdir", target,
+                           "--outdir", str(Path(root) / ".." / "escape"),
+                           "--artifacts-root", root])
+    assert rc == 4
+
+
+def test_outdir_symlink_escape_refused(stub, tmp_path, capsys):
+    import os as _os
+    target, root, _ = _ws(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _os.makedirs(str(root), exist_ok=True)
+    link = Path(root) / "link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    rc = poc_sandbox.main(["run", "--cmd", "id",
+                           "--workdir", target,
+                           "--outdir", str(link / "sub"),
+                           "--artifacts-root", root])
+    assert rc == 4
+
+
+def test_outdir_inside_target_refused(stub, tmp_path, capsys):
+    # Artifacts must live outside the target source tree.
+    target, _, _ = _ws(tmp_path)
+    root = tmp_path / "elsewhere"
+    with pytest.raises(poc_sandbox.PocRefused):
+        poc_sandbox.run_poc(["id"], target, "img:test", 30,
+                            str(Path(target) / "poc-out"),
+                            artifacts_root=str(root))
+
+
+def test_default_outdir_under_root(stub, tmp_path):
+    target, root, _ = _ws(tmp_path)
+    res = poc_sandbox.run_poc(["id"], target, "img:test", 30,
+                              "", artifacts_root=root)
+    assert res["status"] == "completed"
+    outdir = Path(res["outdir"])
+    assert outdir.resolve().is_relative_to(Path(root).resolve())
+    assert outdir.resolve() != Path(target).resolve()
+
+
 def test_e2e_fixture_to_confirmed(stub, monkeypatch, tmp_path, capsys):
     # One end-to-end on an intentionally vulnerable local fixture: scan,
     # ingest, verify, sandboxed PoC, confirm - with finder != checker
     # enforced at every step. The SEC001 trigger is split across literals
     # so this file itself never matches the rule it tests.
-    app = tmp_path / "app"
+    target = tmp_path / "target"
+    target.mkdir()
+    app = target / "app"
     app.mkdir()
     (app / "vuln.py").write_text(
         "pass" "word = \"s3cr3t-hunter-value\"\n", encoding="utf-8")
@@ -162,11 +230,13 @@ def test_e2e_fixture_to_confirmed(stub, monkeypatch, tmp_path, capsys):
                         "--run-id", "v1", "--reason", "needs PoC",
                         "--verifier", "reviewer-e2e"]) == 0
     capsys.readouterr()
-    outdir = tmp_path / "out"
+    root = tmp_path / "artifacts"
+    outdir = root / "out"
     monkeypatch.setenv("POC_STUB_OUT", str(outdir))
     rc = poc_sandbox.main(["run", "--cmd", "python /work/app/vuln.py",
-                           "--workdir", str(tmp_path), "--image", "img:test",
-                           "--timeout", "30", "--outdir", str(outdir)])
+                           "--workdir", str(target), "--image", "img:test",
+                           "--timeout", "30", "--outdir", str(outdir),
+                           "--artifacts-root", str(root)])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "completed"

@@ -140,8 +140,34 @@ def cmd_init(args) -> int:
     return 0
 
 
-def _critic_gaps(units: list) -> list:
+def _has_trace(unit: dict) -> bool:
+    """A substantive trace: at least one non-blank reviewed path or local
+    check. A status-only attempt is a self-declared outcome, not evidence
+    (review finding 1: blank strings don't count either)."""
+    for key in ("reviewed_paths", "local_checks"):
+        for entry in unit.get(key) or []:
+            if isinstance(entry, str) and entry.strip():
+                return True
+    return False
+
+
+def _trace_exists(troot, rel: str) -> bool:
+    """Fabricated-trace check: the reviewed path must resolve inside the
+    target and exist as a file."""
+    try:
+        real = (troot / rel).resolve()
+    except OSError:
+        return False
+    try:
+        real.relative_to(troot.resolve())
+    except ValueError:
+        return False
+    return real.is_file()
+
+
+def _critic_gaps(units: list, target: str = "") -> list:
     gaps = []
+    troot = Path(target).resolve() if target else None
     for u in units:
         cid = u.get("coverage_id", "?")
         status = u.get("status")
@@ -161,6 +187,21 @@ def _critic_gaps(units: list) -> list:
                          "issue": "unsubstantiated-coverage",
                          "suggestion": "covered needs an attempt, reviewed "
                                        "paths, or local checks"})
+        elif status == "covered" and attempts and not _has_trace(u):
+            gaps.append({"coverage_id": cid,
+                         "issue": "covered-without-trace",
+                         "suggestion": "a status-only attempt is not "
+                                       "evidence; record reviewed paths "
+                                       "or local checks"})
+        elif status == "covered" and troot is not None:
+            missing = [p for p in u.get("reviewed_paths") or []
+                       if isinstance(p, str) and p.strip()
+                       and not _trace_exists(troot, p)]
+            if missing:
+                gaps.append({"coverage_id": cid,
+                             "issue": "trace-not-found",
+                             "suggestion": "reviewed paths absent under "
+                                           "target: %s" % ", ".join(missing)})
         elif status in ("planned", "in_progress") and not attempts:
             gaps.append({"coverage_id": cid, "issue": "unworked",
                          "suggestion": "assign a hunter wave"})
@@ -173,7 +214,7 @@ def cmd_critic(args) -> int:
         return _fail("cannot read ledger: %s" % units)
     if not isinstance(units, list):
         return _fail("ledger must be a top-level array of units")
-    gaps = _critic_gaps(units)
+    gaps = _critic_gaps(units, getattr(args, "target", ""))
     counts: dict = {}
     for g in gaps:
         counts[g["issue"]] = counts.get(g["issue"], 0) + 1
@@ -347,6 +388,8 @@ def main(argv=None) -> int:
     p = sub.add_parser("critic", help="List uncovered/unsubstantiated units")
     p.add_argument("--ledger", required=True)
     p.add_argument("--format", default="table", choices=["table", "json"])
+    p.add_argument("--target", default="",
+                   help="target checkout: reviewed paths must exist under it")
     p.set_defaults(fn=cmd_critic)
     p = sub.add_parser("budget", help="Account waves/attempts vs a profile")
     p.add_argument("--ledger", required=True)

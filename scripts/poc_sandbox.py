@@ -19,6 +19,12 @@ scripts/test_poc_sandbox.py::test_hardened_flags):
     operator-owned artifact dir read-write at /out. The Docker socket,
     host home directories, cloud credential paths, and host env vars
     NEVER cross the boundary (only a fixed minimal PATH/HOME/USER).
+  - Host-side mount policy (review finding 2, enforced in
+    _resolve_outdir): the writable artifact dir must resolve (symlinks
+    included) inside the approved artifacts root
+    (AUDITFORGE_ARTIFACTS_ROOT, default <cwd>/reports) and outside the
+    target workdir. Absolute escapes, `..` traversal, symlink redirection,
+    and target-tree overlap are all refusals, never silent remaps.
   - `--pull never` + a pre-flight `image inspect`: images are
     operator-provisioned (`docker pull <image>` first); a run never
     fetches code at PoC time.
@@ -91,6 +97,41 @@ def _image_present(base: list[str], image: str) -> bool:
     return proc.returncode == 0
 
 
+def _default_artifacts_root() -> str:
+    return os.environ.get("AUDITFORGE_ARTIFACTS_ROOT",
+                          os.path.join(os.getcwd(), "reports"))
+
+
+def _resolve_outdir(workdir: str, outdir_arg: str,
+                    artifacts_root: str) -> str:
+    """Confine the writable mount (review finding 2). The resolved artifact
+    dir must live inside the approved artifacts root and outside the target
+    workdir; symlinks are resolved before either check, so `..` traversal
+    and link redirection cannot escape. Violations raise PocRefused."""
+    root = Path(artifacts_root or _default_artifacts_root()).resolve()
+    work = Path(workdir).resolve()
+    if outdir_arg:
+        cand = Path(outdir_arg)
+        cand = cand.resolve() if cand.is_absolute() else \
+            (Path(os.getcwd()) / cand).resolve()
+    else:
+        cand = root / ("poc-%s" % uuid.uuid4().hex[:12])
+    try:
+        cand.relative_to(root)
+    except ValueError:
+        raise PocRefused("artifact dir outside approved root %s: %s"
+                         % (root, outdir_arg or "<default>"))
+    if cand == work:
+        raise PocRefused("artifact dir must not be the target itself")
+    try:
+        cand.relative_to(work)
+    except ValueError:
+        pass
+    else:
+        raise PocRefused("artifact dir overlaps the target source tree")
+    return str(cand)
+
+
 def _hardened_argv(base: list[str], name: str, cmd: list[str], workdir: str,
                    image: str, outdir: str) -> list[str]:
     return base + [
@@ -115,13 +156,17 @@ def _hardened_argv(base: list[str], name: str, cmd: list[str], workdir: str,
 
 
 def run_poc(cmd: list[str], workdir: str, image: str = DEFAULT_IMAGE,
-            timeout: int = DEFAULT_TIMEOUT, outdir: str = "") -> dict:
+            timeout: int = DEFAULT_TIMEOUT, outdir: str = "",
+            artifacts_root: str = "") -> dict:
     """Execute cmd in a disposable hardened container. Raises PocRefused
-    when no backend (or image) is available; never runs unprotected."""
+    when no backend (or image) is available, or when the artifact dir
+    escapes the approved root or overlaps the target; never runs
+    unprotected."""
     if not cmd:
         raise PocRefused("empty PoC command: nothing to run")
     if not os.path.isdir(workdir):
         raise PocRefused("workdir is not a directory: %s" % workdir)
+    out = _resolve_outdir(workdir, outdir, artifacts_root)
     ok, detail = backend_available()
     if not ok:
         raise PocRefused(detail)
@@ -130,7 +175,6 @@ def run_poc(cmd: list[str], workdir: str, image: str = DEFAULT_IMAGE,
         raise PocRefused("image not present locally: %s "
                          "(pre-pull with `docker pull %s`; "
                          "runs never fetch images)" % (image, image))
-    out = outdir or os.path.join(workdir, ".poc-out")
     os.makedirs(out, exist_ok=True)
     name = "auditforge-poc-%s" % uuid.uuid4().hex[:12]
     argv = _hardened_argv(base, name, cmd, os.path.abspath(workdir),
@@ -173,7 +217,8 @@ def _refusal_payload(blocker: str) -> dict:
 def cmd_run(args) -> int:
     try:
         result = run_poc(shlex.split(args.cmd), args.workdir, args.image,
-                         args.timeout, args.outdir)
+                         args.timeout, args.outdir,
+                         artifacts_root=args.artifacts_root)
     except PocRefused as exc:
         payload = _refusal_payload(exc.blocker)
         print(json.dumps(payload))
@@ -224,7 +269,12 @@ def main(argv=None) -> int:
     r.add_argument("--image", default=DEFAULT_IMAGE)
     r.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     r.add_argument("--outdir", default="",
-                   help="artifact dir, mounted read-write at /out")
+                   help="artifact dir, mounted read-write at /out "
+                        "(must resolve inside --artifacts-root, outside "
+                        "--workdir)")
+    r.add_argument("--artifacts-root", default="",
+                   help="approved writable root (default "
+                        "AUDITFORGE_ARTIFACTS_ROOT or <cwd>/reports)")
     r.add_argument("--record", action="store_true",
                    help="on refusal/inconclusive runs, record "
                         "needs_validation to the ledger (never confirms)")

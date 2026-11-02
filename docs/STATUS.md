@@ -71,6 +71,7 @@ difference alone is not independence), `security-audit` a thin alias,
 `/audit` fronts the workflow. Gates: suite 424 passed, HIGH 0, hygiene 0,
 contract + structure PASS. Remaining: benchmark scorecard (R-141) + live
 Docker sandbox validation (daemon unreachable on this host).
+Branch-review hardening (R-152, on review/r139-r140): covered units need a substantive trace (blank/fabricated traces flagged); sandbox artifact mounts confined to the approved root outside the target. Stub-backed lifecycle tests and live Docker isolation stay distinct gates.
 As of 2026-09-20 the ROADMAP's Ready table is down to four still-pending
 items, each with a cause: R-027 (HITRUST — genuinely blocked, no open
 machine-readable source exists), R-049 (freshness watch, no action yet —

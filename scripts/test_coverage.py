@@ -181,6 +181,64 @@ def test_carry_rejected_claim_rescoped(tmp_path):
     assert carried["status"] == "planned"
 
 
+def test_critic_flags_covered_without_substantive_trace(tmp_path, capsys):
+    # Review finding 1: a status-only attempt is not evidence. Covered
+    # with attempts but no reviewed paths or local checks is flagged.
+    units = _init_ledger(tmp_path)
+    capsys.readouterr()
+    units[0]["status"] = "covered"
+    units[0]["attempts"] = [{"status": "covered"}]
+    p = _write(tmp_path, units, "led.json")
+    assert cov.main(["critic", "--ledger", p, "--format", "json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["issues"].get("covered-without-trace") == 1
+
+
+def test_critic_rejects_blank_traces(tmp_path, capsys):
+    # Blank strings are not a trace either.
+    units = _init_ledger(tmp_path)
+    capsys.readouterr()
+    units[0]["status"] = "covered"
+    units[0]["attempts"] = [{"status": "covered"}]
+    units[0]["reviewed_paths"] = ["", "   "]
+    units[0]["local_checks"] = [""]
+    p = _write(tmp_path, units, "led.json")
+    assert cov.main(["critic", "--ledger", p, "--format", "json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["issues"].get("covered-without-trace") == 1
+
+
+def test_critic_accepts_substantive_trace(tmp_path, capsys):
+    units = _init_ledger(tmp_path)
+    capsys.readouterr()
+    units[0]["status"] = "covered"
+    units[0]["attempts"] = [{"status": "covered"}]
+    units[0]["reviewed_paths"] = ["src/routes/inquire.py"]
+    units[1]["status"] = "covered"
+    units[1]["attempts"] = [{"status": "covered"}]
+    units[1]["local_checks"] = ["compared auth middleware on both routes"]
+    p = _write(tmp_path, units, "led.json")
+    assert cov.main(["critic", "--ledger", p, "--format", "json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    flagged = {g["coverage_id"] for g in report["gaps"]}
+    assert units[0]["coverage_id"] not in flagged
+    assert units[1]["coverage_id"] not in flagged
+
+
+def test_critic_verifies_traces_against_target(tmp_path, capsys):
+    # Fabricated trace: reviewed path that does not exist under --target.
+    units = _init_ledger(tmp_path)
+    capsys.readouterr()
+    units[0]["status"] = "covered"
+    units[0]["attempts"] = [{"status": "covered"}]
+    units[0]["reviewed_paths"] = ["src/routes/does-not-exist.py"]
+    p = _write(tmp_path, units, "led.json")
+    assert cov.main(["critic", "--ledger", p, "--target", str(tmp_path),
+                     "--format", "json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["issues"].get("trace-not-found") == 1
+
+
 def test_union_flags_missing_controls(tmp_path, capsys):
     units = _init_ledger(tmp_path)
     capsys.readouterr()
