@@ -7,12 +7,12 @@ description: Full security audit of a repository - deterministic pre-pass plus a
 
 > Plugin copy. Canonical source: `.claude/skills/security-audit/SKILL.md` in
 > the AuditForge repo - reconcile on bump (same pin-and-reconcile habit as
-> `resources/`). Upstream: Cloudflare's MIT-licensed `security-audit-skill`
-> (report schema vendored as `scripts/report-schema.json`).
+> `resources/`).
 
-Adapted from Cloudflare's MIT-licensed `security-audit-skill`. Keeps their
-six phases, adversarial validation, coverage ledger, and severity discipline;
-adds what they lack:
+Adapted from Cloudflare's MIT-licensed `security-audit-skill`
+(reference clone: `resources/security-audit-skill/`, report schema vendored
+as `scripts/report-schema.json`). Keeps their six phases, adversarial
+validation, coverage ledger, and severity discipline; adds what they lack:
 
 - **Phase 0 deterministic sweep** (this repo's scanners + intel) feeds
   candidates *in* - agents never run scanners mid-hunt.

@@ -60,6 +60,13 @@ pwsh scripts/update_sources.ps1        # Windows PowerShell 5.1+ / pwsh
 # Scan a repo
 python scripts/audit_repo.py <path-to-target> --fail-on HIGH
 
+# ...or install the auditor as a console script (same venv; works from any
+# directory because the output path fix in run-3 §3.6 resolves relative
+# sbom/report paths against the scan target, not the CWD)
+.venv/Scripts/python.exe -m pip install -e .   # Windows
+# .venv/bin/python -m pip install -e .          # macOS/Linux
+auditforge <path-to-target> --fail-on HIGH
+
 # Regenerate the framework control index after a KB update
 python scripts/sync_frameworks.py
 

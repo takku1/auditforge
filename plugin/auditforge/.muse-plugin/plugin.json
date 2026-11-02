@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "auditforge",
   "displayName": "AuditForge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "SOC 2 and multi-framework GRC auditing: knowledge-base skills, audit commands, and the control-search MCP server.",
   "compat": {
     "source": "native",

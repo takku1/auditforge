@@ -11,6 +11,14 @@ CODE_EXTENSIONS = {
 }
 IAC_EXTENSIONS = {".tf", ".tfvars", ".yaml", ".yml", ".json", ".hcl", ".toml"}
 CONFIG_EXTENSIONS = IAC_EXTENSIONS | {".env", ".ini", ".cfg", ".conf", ".properties", ".xml"}
+# Basenames that carry security-headers config (server _headers file,
+# platform configs, server configs). Shared by WEB002 filenames and the
+# posture lane's header discovery - run-3 section 3.7 / 4.1.
+_WEB_HEADERS_FILES = frozenset({
+    "_headers", "vercel.json", "netlify.toml", "next.config.js",
+    "next.config.mjs", "next.config.ts", "nginx.conf", "caddyfile",
+    "web.config",
+})
 
 SKIP_DIRS = {
     ".git", ".hg", ".svn", "node_modules", "__pycache__", "vendor",
@@ -202,7 +210,8 @@ RULES = [
         severity="MEDIUM",
         controls=("CC8.1",),
         patterns=_r(
-            r"__proto__",  # soc2-ignore: rule pattern text matches itself
+            r"\[\s*[\"']__proto__[\"']\s*\]\s*=(?!=)",  # soc2-ignore: rule pattern text matches itself
+            r"\{\s*[\"']?__proto__[\"']?\s*:",  # soc2-ignore: rule pattern text matches itself
             r"\.constructor\s*\[",
             r"\.prototype\s*\[",
         ),
@@ -387,14 +396,15 @@ RULES = [
                     "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
     ),
     Rule(
-        id="PRIV003", name="Cookie or Session-Storage Write",
+        id="PRIV003", name="Cookie or Web Storage Write",
         severity="MEDIUM",
         controls=("CC6.1",),
         patterns=_r(
             r"document\.cookie\s*=[^=]",
             r"sessionStorage\.setItem\s*\(",
+            r"localStorage\.setItem\s*\(",
         ),
-        remediation="A cookie or sessionStorage entry is written - namespace it "
+        remediation="A cookie or web-storage entry is written - namespace it "
                     "(__Secure- / __Host- where applicable) and document the "
                     "eviction path so GDPR/CCPA deletion requests can reach it. "
                     "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
@@ -482,6 +492,7 @@ EXTRA_RULES = [
             r"\bsystem\s*:\s*[^,}\n]{0,200}?\+\s*\w+",
             r"\bsystem\s*=\s*f['\"]",
             r"\bsystem\s*=\s*[^#\n]{0,200}?\+\s*\w+",
+            r"\bsystem\s*[:=]\s*(?![A-Z][A-Z0-9_]*\s*[,)}\]])(?![\"'`])(?!(?:process\.env|os\.environ|os\.getenv)\b)([A-Za-z_$][\w$]*)",
         ),
         extensions=frozenset(CODE_EXTENSIONS),
         remediation="Treat this as a direct prompt-injection sink (OWASP LLM "
@@ -591,6 +602,9 @@ EXTRA_RULES = [
         patterns=_r(
             r"Content-Security-Policy-Report-Only",  # soc2-ignore: rule pattern text matches itself
         ),
+        extensions=frozenset({""}),
+        filenames=_WEB_HEADERS_FILES,
+
         remediation="Report-only mode collects telemetry but blocks nothing; "
                     "promote to an enforced Content-Security-Policy (keep "
                     "report-uri/report-to for signal) once clean (ASVS V3.4.7).",
@@ -721,6 +735,55 @@ EXTRA_RULES = [
                     "Verify the token server-side on every protected action "
                     "(OWASP A07:2021). "
                     "Evidence: docs/field-test-seancarneywebsite-2026-11-02.md.",
+    ),
+    Rule(
+        id="WEB014", name="Oversized _headers Line",
+        severity="HIGH",
+        controls=("CC6.7",),
+        patterns=(),
+        remediation="A line in a _headers file is over 2000 characters - "
+                    "Cloudflare Pages/Workers static assets silently ignore "
+                    "such lines (workerd logs once at startup), so a long "
+                    "hash/nonce CSP ships NO policy at all. Split the policy "
+                    "across multiple path rules or shorten it (fewer hashes). "
+                    "Check the built output too: build steps can expand "
+                    "placeholders past the limit (OWASP A05:2021, ASVS V3.4.3). "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02-run3.md.",
+    ),
+    Rule(
+        id="WEB015", name="State-Changing Route Without Method Allowlist",
+        severity="MEDIUM",
+        controls=("CC6.1",),
+        patterns=(),
+        remediation="State-changing routes exist but no method allowlist was "
+                    "found (405 handling, req.method/request.method check, "
+                    "Allow response header). An endpoint that accepts any verb "
+                    "invites method-confusion and CSRF-adjacent bypasses - "
+                    "scope each route to its verbs (OWASP A01:2021, ASVS V3.2.2). "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02-run3.md.",
+    ),
+    Rule(
+        id="WEB016", name="State-Changing Route Without Content-Type Check",
+        severity="LOW",
+        controls=("CC6.1",),
+        patterns=(),
+        remediation="State-changing routes exist but no content-type "
+                    "validation was found (415 handling, content-type header "
+                    "comparison). Unguarded parsing invites smuggling and "
+                    "mismatched-parser bugs - reject unexpected media types "
+                    "explicitly (OWASP A05:2021). "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02-run3.md.",
+    ),
+    Rule(
+        id="WEB017", name="Missing security.txt",
+        severity="LOW",
+        controls=("CC6.1",),
+        patterns=(),
+        remediation="No security.txt was found at the repo root or under "
+                    ".well-known/. Without a published contact, researchers "
+                    "cannot report vulnerabilities responsibly - add one per "
+                    "RFC 9116 (Contact + Expires). "
+                    "Evidence: docs/field-test-seancarneywebsite-2026-11-02-run3.md.",
     ),
 ]
 

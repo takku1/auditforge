@@ -13,7 +13,7 @@ from .models import Finding, Rule, UnifiedFinding
 from .rules import (
     RULES, SKIP_DIRS, SKIP_FILES, SKIP_EXTENSIONS, MAX_FILE_BYTES,
     PLACEHOLDER_RE, RESERVED_SUFFIX_RE, TEST_PATH_RE, SUPPRESS_TOKEN,
-    RULES_BY_ID,
+    RULES_BY_ID, _WEB_HEADERS_FILES,
     is_comment, downgrade
 )
 
@@ -62,27 +62,102 @@ def _pii_allowed(value: str, patterns) -> bool:
 
 
 _SAFE_STRINGIFY_RE = re.compile(
-    r"JSON\.stringify\s*\([^;]*\)\.replace\s*\(",
+    r"JSON\.stringify\s*\([^;]*\)\.replace(All)?\s*\(",
 )
 _MODEL_OUTPUT_RE = re.compile(
     r"fetch\s*\(|messages\.create|chat\.completions|completions\.create"
     r"|\bmodel_output\b|\bllm_output\b|\bcompletion\b",
 )
-def _is_bare_suppression(line_text: str) -> bool:
-    """True when a soc2-ignore carries no justification (field report §3.10):
-    a bare token, or a colon with nothing actionable after it. A `: reason`
-    suffix keeps the suppression silent. Only lines that also matched a
-    rule reach this check, so prose mentions never warn."""
+def _suppression_scope(line_text: str):
+    """Rule IDs named by soc2-ignore[RULE,...], or None when unscoped
+    (an unscoped token suppresses every rule on the line). Run-3 §3.10."""
+    m = re.search(r"soc2-ignore\s*\[([A-Za-z0-9_,\s-]+)\]", line_text)
+    if not m:
+        return None
+    return {p.strip().upper() for p in m.group(1).split(",") if p.strip()}
+
+
+def _suppression_reason(line_text: str) -> str:
+    """Justification after the token (and optional [scope]); "" when bare."""
     idx = line_text.find(SUPPRESS_TOKEN)
     rest = line_text[idx + len(SUPPRESS_TOKEN):].strip()
+    if rest.startswith("["):
+        end = rest.find("]")
+        rest = rest[end + 1:].strip() if end != -1 else ""
     if not rest.startswith(":"):
-        return True
-    return not rest[1:].strip(" \t\"'#").strip()
+        return ""
+    return rest[1:].strip(" \t\"'#").strip()
+
+
+def _is_bare_suppression(line_text: str) -> bool:
+    """True when a soc2-ignore carries no justification (field report §3.10):
+    a bare token, a dangling scope, or a colon with nothing actionable
+    after it. A `[scope]: reason` / `: reason` suffix keeps the suppression
+    silent. Only lines that also matched a rule reach this check, so prose
+    mentions never warn."""
+    return not _suppression_reason(line_text)
 
 
 _RAW_IMPORT_RE = re.compile(
     r"import\s+(\w+)\s+from\s*[^\s;]+\?raw",
 )
+
+
+_CONSENT_RE = re.compile(
+    r"consent|hasConsent|consentv2|cookieyes|onetrust|__tcfapi|"
+    r"consentmanager|osano|gtag\(\s*['\"]consent['\"]|"
+    r"['\"](granted|denied)['\"]|consent.{0,24}granted|granted.{0,24}consent",
+    re.IGNORECASE,
+)
+_STORAGE_EVICTION_RES = (
+    re.compile(r"Object\.keys\s*\(\s*localStorage\s*\)"),
+    re.compile(r"\bremoveItem\s*\("),
+)
+_PRIVILEGED_ROUTE_RE = re.compile(
+    r"admin|insights|internal|metrics|dashboard|settings|billing|payment|account",
+    re.IGNORECASE,
+)
+_CATCHES_DISPATCH_RE = re.compile(
+    r"\btry\b.{0,400}?\bnext\s*\(.{0,400}?\bcatch\b|"
+    r"\bcatch\b.{0,400}?await\s+handler",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _consent_nearby(content: str, line_starts: list, line_no: int,
+                    window: int = 15) -> bool:
+    """True when a consent predicate appears on the match line or in the
+    preceding window of lines (run-3 section 3.2): a consent-gated loader
+    is compliant, not a PRIV001 finding."""
+    end = line_starts[line_no] - 1 if line_no < len(line_starts) else len(content)
+    start = line_starts[max(0, line_no - 1 - window)]
+    return bool(_CONSENT_RE.search(content[start:end]))
+
+
+def _storage_eviction_present(content: str) -> bool:
+    """True when the file both enumerates localStorage keys and removes
+    them (namespace prefix plus bulk-clear helper): the documented eviction
+    path GDPR/CCPA deletion requests can reach (run-3 section 3.4)."""
+    return all(rx.search(content) for rx in _STORAGE_EVICTION_RES)
+
+
+def _catches_next_dispatch(mw_text: str) -> bool:
+    """A try/catch around the middleware dispatch (or a catch that awaits
+    the handler) IS the global error handler, whatever it is named
+    (run-3 section 3.2)."""
+    return bool(_CATCHES_DISPATCH_RE.search(mw_text))
+
+
+def _content_length_bounded(text: str) -> bool:
+    """A content-length read compared against a number bounds the request,
+    whatever the variable is named (run-3 section 3.2). The read and the
+    comparison may sit in different statements, so each content-length
+    mention gets a +-150 char window instead of a single-line regex."""
+    for m in re.finditer(r"content-length", text, re.IGNORECASE):
+        window = text[max(0, m.start() - 150):m.end() + 150]
+        if re.search(r"(>=|<=|>|<)\s*\d|\d\s*(>=|<=|>|<)", window):
+            return True
+    return False
 
 
 def _raw_import_sink(line_text: str, content: str) -> bool:
@@ -94,7 +169,8 @@ def _raw_import_sink(line_text: str, content: str) -> bool:
     return False
 
 
-def scan_file(path: str, rel: str, pii_allow: list = None) -> "tuple[list, Optional[str]]":
+def scan_file(path: str, rel: str, pii_allow: list = None,
+              suppressions: list = None) -> "tuple[list, Optional[str]]":
     """Returns (findings, skip_reason). skip_reason is None for a normally
     scanned file, else "oversized" / "binary" / "unreadable" - see R-017:
     these were silent no-ops before, indistinguishable from "scanned, found
@@ -153,13 +229,30 @@ def scan_file(path: str, rel: str, pii_allow: list = None) -> "tuple[list, Optio
                 if is_comment(line_text, ext):
                     continue
                 if SUPPRESS_TOKEN in line_text:
-                    if line_no not in warned_lines and _is_bare_suppression(line_text):
-                        warned_lines.add(line_no)
-                        findings.append(Finding(
-                            rule=RULES_BY_ID["SUPPRESS001"], severity="LOW", file=rel,
-                            line=line_no, snippet=line_text.strip()[:200],
-                            in_test_context=in_test,
-                        ))
+                    scope = _suppression_scope(line_text)
+                    if scope is None or rule.id in scope:
+                        reason = _suppression_reason(line_text)
+                        if suppressions is not None:
+                            suppressions.append({
+                                "file": rel,
+                                "line": line_no,
+                                "rule_id": rule.id,
+                                "reason": reason,
+                                "justified": bool(reason),
+                            })
+                        if line_no not in warned_lines and _is_bare_suppression(line_text):
+                            warned_lines.add(line_no)
+                            findings.append(Finding(
+                                rule=RULES_BY_ID["SUPPRESS001"], severity="LOW", file=rel,
+                                line=line_no, snippet=line_text.strip()[:200],
+                                in_test_context=in_test,
+                            ))
+                        continue
+                    # Scoped to other rule(s): this finding stands.
+                if rule.id == "PRIV001" and _consent_nearby(content, line_starts, line_no):
+                    continue
+                if (rule.id == "PRIV003" and "localStorage" in match.group(0)
+                        and _storage_eviction_present(content)):
                     continue
                 if rule.id == "WEB002" and rel.lower().endswith(".md"):
                     continue  # prose docs mentioning the header are not a deployment (§3.7)
@@ -197,11 +290,8 @@ _DIFF_FILE_RE = re.compile(r"^\+\+\+ b/(.+)$")
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
-_WEB_HEADERS_FILES = frozenset({
-    "_headers", "vercel.json", "netlify.toml", "next.config.js",
-    "next.config.mjs", "next.config.ts", "nginx.conf", "caddyfile",
-    "web.config",
-})
+# _WEB_HEADERS_FILES lives in auditor.rules now (single source shared
+# with WEB002 filenames) - imported above.
 _WEB_ROUTE_DIRS = frozenset({
     "api", "routes", "endpoints", "server", "handlers", "controllers",
 })
@@ -260,8 +350,77 @@ _BASELINE_LOG_RE = re.compile(
 )
 _BASELINE_BOUNDS_RE = re.compile(
     r"bodyLimit|maxBodySize|maxRequestSize|BODY_LIMIT|maxDuration|max_duration|"
-    r"timeout\s*:\s*\d",
+    r"timeout\s*:\s*\d|bodySizeLimit|sizeLimit|maxPayload|client_max_body_size|clientMaxBodySize",
 )
+
+
+_METHOD_RE = re.compile(
+    r"405|method\.not\.allowed|methodNotAllowed|method_not_allowed|"
+    r"\bAllow\s*:|req\.method\b|request\.method\b",
+    re.IGNORECASE,
+)
+_CONTENT_TYPE_RE = re.compile(
+    r"415|unsupported\.media|content-type.{0,80}?(===|!==|==|!=|includes|startsWith|match\()",
+    re.IGNORECASE,
+)
+_HEADERS_LINE_LIMIT = 2000  # Cloudflare Pages/Workers silently drop
+# longer _headers lines (workerd logs once at startup): a hash-heavy CSP
+# over the limit ships NO policy. Run-3 report section 4.1.
+
+# Build-output dirs are SKIP_DIRS for generic scanning (noise), but the CDN
+# serves the BUILT headers file, not the source - so header-config discovery
+# takes a second targeted pass through them (run-3 section 4.1).
+_BUILD_OUTPUT_DIRS = frozenset({
+    "dist", "build", "out", ".vercel", ".next", ".nuxt",
+})
+
+
+def _check_headers_lines(rel: str, htext: str, findings: list) -> None:
+    """WEB014: any _headers line over the platform limit is a HIGH - the
+    whole policy on that line never ships. Only _headers carries this
+    platform limit (netlify.toml / vercel.json do not)."""
+    if os.path.basename(rel.lower().replace("\\", "/")) != "_headers":
+        return
+    for idx, line in enumerate(htext.splitlines(), 1):
+        if len(line) > _HEADERS_LINE_LIMIT:
+            findings.append(_web_finding(
+                "WEB014", rel,
+                "Line %d is %d chars - Cloudflare Pages/Workers silently "
+                "drop _headers lines over 2000 chars, so this policy "
+                "never ships: %s" % (idx, len(line), line[:120]),
+                line=idx))
+
+
+def _process_headers_text(rel: str, htext: str, csp_values: list,
+                          hsts_values: list, findings: list) -> None:
+    """Shared headers-file handling for source AND build-output files:
+    CSP/HSTS value extraction for WEB006-008 plus WEB014 line length."""
+    csp_values.extend((rel, v) for v in _csp_values_in(htext))
+    hsts_values.extend((rel, v) for v in _hsts_values_in(htext))
+    _check_headers_lines(rel, htext, findings)
+
+
+def _build_output_headers(root: str, excludes: list):
+    """Yield (path, rel) for headers-config files inside build-output dirs.
+    iter_files() prunes these dirs entirely, so this targeted walk is the
+    only way the served (built) config is seen."""
+    excludes = excludes or []
+    for bdir in _BUILD_OUTPUT_DIRS:
+        broot = os.path.join(root, bdir)
+        if not os.path.isdir(broot):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(broot):
+            for name in filenames:
+                if should_skip_file(name):
+                    continue
+                path = os.path.join(dirpath, name)
+                rel = os.path.relpath(path, root).replace(os.sep, "/")
+                low = rel.lower()
+                if (os.path.basename(low) in _WEB_HEADERS_FILES
+                        or low.endswith(".vercel/output/config.json")):
+                    if any(fnmatch.fnmatch(rel, pat) for pat in excludes):
+                        continue
+                    yield path, rel
 
 
 def _middleware_coverage(middleware_files: list) -> "tuple[dict, dict, str]":
@@ -382,10 +541,11 @@ def _hsts_problems(hsts: str) -> list:
     return problems
 
 
-def _web_finding(rule_id: str, rel: str, snippet: str) -> "Finding":
+def _web_finding(rule_id: str, rel: str, snippet: str,
+                   line: int = 1, severity: str = None) -> "Finding":
     rule = RULES_BY_ID[rule_id]
     in_test = bool(TEST_PATH_RE.search(rel))
-    return Finding(rule=rule, severity=rule.severity, file=rel, line=1,
+    return Finding(rule=rule, severity=severity or rule.severity, file=rel, line=line,
                    snippet=snippet, in_test_context=in_test)
 
 
@@ -402,9 +562,13 @@ def scan_web_posture(root: str, excludes: list) -> list:
     siteverify_found = False
     web = False
     headers_ok = False
+    security_txt_found = False
+    findings: list = []
     for path, rel in iter_files(root, excludes or []):
         low = rel.lower().replace("\\", "/")
         base = os.path.basename(low)
+        if base == "security.txt":
+            security_txt_found = True
         if base in _WEB_HEADERS_FILES:
             web = True
             try:
@@ -420,8 +584,8 @@ def scan_web_posture(root: str, excludes: list) -> list:
                     with open(path, "r", encoding="utf-8", errors="ignore") as fh:
                         htext = fh.read()
                 headers_ok = True
-                csp_values.extend((rel, v) for v in _csp_values_in(htext))
-                hsts_values.extend((rel, v) for v in _hsts_values_in(htext))
+                _process_headers_text(rel, htext, csp_values,
+                                      hsts_values, findings)
             except OSError:
                 headers_ok = True
             continue
@@ -446,7 +610,20 @@ def scan_web_posture(root: str, excludes: list) -> list:
                         siteverify_found = True
             except OSError:
                 pass
-    findings = []
+    for bpath, brel in _build_output_headers(root, excludes):
+        web = True
+        try:
+            if os.path.getsize(bpath) > MAX_FILE_BYTES:
+                headers_ok = True
+                continue
+            with open(bpath, "r", encoding="utf-8", errors="ignore") as fh:
+                bhtext = fh.read()
+        except OSError:
+            headers_ok = True
+            continue
+        headers_ok = True
+        _process_headers_text(brel, bhtext, csp_values,
+                              hsts_values, findings)
     if not web:
         return findings
     mw_rate, mw_origin, mw_text = _middleware_coverage(middleware_files)
@@ -500,13 +677,35 @@ def scan_web_posture(root: str, excludes: list) -> list:
                 "check signal in the file or in covering middleware."))
     if api_files:
         corpus = "\n".join([mw_text] + route_texts)
-        if not _BASELINE_AUTH_RE.search(corpus):
+        gate_in_mw = bool(_BASELINE_AUTH_RE.search(mw_text))
+        ad_hoc = sum(1 for t in route_texts if _BASELINE_AUTH_RE.search(t))
+        auth_anywhere = bool(_BASELINE_AUTH_RE.search(corpus))
+        if gate_in_mw:
+            pass  # one shared gate in the middleware chain
+        elif ad_hoc >= 2:
             findings.append(_web_finding(
                 "WEB009", ".",
-                "API routes exist but no single authentication gate (withAuth, "
-                "requireAuth, authenticate, verifyToken, ...) was found in "
-                "middleware or route files."))
-        if not _BASELINE_ERROR_RE.search(corpus):
+                "Auth checks appear ad-hoc in %d route files with no shared " % ad_hoc +
+                "middleware gate - per-route checks drift; put one gate in "
+                "the middleware chain (OWASP A01:2021, ASVS V3.2.2)."))
+        elif not auth_anywhere:
+            if any(_PRIVILEGED_ROUTE_RE.search(rel) for _, rel in api_files):
+                findings.append(_web_finding(
+                    "WEB009", ".",
+                    "API routes exist but no single authentication gate (withAuth, "
+                    "requireAuth, authenticate, verifyToken, ...) was found in "
+                    "middleware or route files (OWASP A01:2021, ASVS V3.2.2)."))
+            else:
+                findings.append(_web_finding(
+                    "WEB009", ".",
+                    "No authentication gate was found, but no route looks "
+                    "privileged (no admin/internal/dashboard-style paths) and "
+                    "no scattered per-route checks - treat as informational "
+                    "for an intentionally-public API; add a shared gate "
+                    "before shipping a privileged route.",
+                    severity="LOW"))
+        if (not _BASELINE_ERROR_RE.search(corpus)
+                and not _catches_next_dispatch(mw_text)):
             findings.append(_web_finding(
                 "WEB010", ".",
                 "API routes exist but no global error handler (onError, "
@@ -516,11 +715,33 @@ def scan_web_posture(root: str, excludes: list) -> list:
                 "WEB011", ".",
                 "API routes exist but no structured logging signal (logger.*, "
                 "console.*, Sentry/captureException) was found."))
-        if not _BASELINE_BOUNDS_RE.search(corpus):
+        if (not _BASELINE_BOUNDS_RE.search(corpus)
+                and not _content_length_bounded(corpus)):
             findings.append(_web_finding(
                 "WEB012", ".",
                 "API routes exist but no request size/duration bound (bodyLimit, "
                 "maxBodySize, maxDuration, timeout) was found."))
+        if not _METHOD_RE.search(corpus):
+            findings.append(_web_finding(
+                "WEB015", ".",
+                "State-changing routes exist but no method allowlist was "
+                "found (405 handling, req.method/request.method check, "
+                "Allow response header) - scope each route to its verbs "
+                "(OWASP A01:2021, ASVS V3.2.2)."))
+        if not _CONTENT_TYPE_RE.search(corpus):
+            findings.append(_web_finding(
+                "WEB016", ".",
+                "State-changing routes exist but no content-type validation "
+                "was found (415 handling, content-type header comparison) - "
+                "reject unexpected media types explicitly (OWASP A05:2021).",
+                severity="LOW"))
+    if web and not security_txt_found:
+        findings.append(_web_finding(
+            "WEB017", ".",
+            "No security.txt was found at the repo root or under "
+            ".well-known/ - publish researcher contact details per "
+            "RFC 9116 (Contact + Expires).",
+            severity="LOW"))
     if turnstile_refs and not siteverify_found:
         findings.append(_web_finding(
             "WEB013", turnstile_refs[0],
@@ -1308,7 +1529,106 @@ def _dast_auth_headers() -> dict:
     return headers
 
 
-def _header_findings(url: str, headers, mapping_data: dict) -> List[UnifiedFinding]:
+def _is_html_response(get_header) -> bool:
+    """Document-level header checks (CSP, frame-ancestors) only apply to
+    documents. A response declaring a non-HTML content type (images, css,
+    fonts, manifests) is not governed by them - flagging every asset
+    produced 18 rows for one root cause (run-3 section 4.3). A missing
+    content-type still runs the checks (fail-closed)."""
+    try:
+        ctype = get_header("Content-Type")
+    except Exception:
+        return True
+    if ctype is None:
+        return True
+    return "text/html" in str(ctype).lower()
+
+
+def _page_scripts_and_meta(body: str) -> list:
+    """Split an HTML body into meta-CSP and inline-script events:
+    [("meta", offset, policy_text)] and [("script", offset, (attrs, text))]
+    for inline (no src) non-blank scripts, in document order. Offsets are
+    absolute char offsets for before/after-meta comparison (run-3 4.2).
+    Stdlib html.parser only; best-effort (malformed markup skips)."""
+    from html.parser import HTMLParser
+    line_starts = [0]
+    for m in re.finditer(r"\n", body):
+        line_starts.append(m.end())
+
+    class _P(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.events = []
+            self._open = []
+
+        def _abs(self):
+            lineno, col = self.getpos()
+            if 1 <= lineno <= len(line_starts):
+                return line_starts[lineno - 1] + col
+            return 0
+
+        def handle_starttag(self, tag, attrs):
+            ad = dict(attrs)
+            if tag == "meta":
+                if (ad.get("http-equiv", "").lower()
+                        == "content-security-policy" and ad.get("content")):
+                    self.events.append(("meta", self._abs(), ad["content"]))
+            elif tag == "script" and not (ad.get("src") or "").strip():
+                self._open.append([self._abs(), ad, []])
+
+        def handle_data(self, data):
+            if self._open:
+                self._open[-1][2].append(data)
+
+        def handle_endtag(self, tag):
+            if tag == "script" and self._open:
+                pos, ad, chunks = self._open.pop()
+                text = "".join(chunks)
+                if text.strip():
+                    self.events.append(("script", pos, (ad, text)))
+
+    parser = _P()
+    parser.feed(body)
+    return parser.events
+
+
+def _csp_script_src_tokens(policy_text: str) -> set:
+    """Tokens of script-src, falling back to default-src per the CSP
+    fallback chain. Commas treated as whitespace (some servers emit them)."""
+    directives = {}
+    for part in str(policy_text).split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        name, _, rest = part.partition(" ")
+        directives.setdefault(name.strip().lower(), rest.strip())
+    src = directives.get("script-src", directives.get("default-src", ""))
+    return set(src.replace(",", " ").split())
+
+
+def _uncovered_inline_scripts(scripts: list, tokens: set) -> list:
+    """Inline scripts neither nonce-covered nor hash-covered by the
+    effective policy. Callers skip this entirely when 'unsafe-inline' is
+    present (everything runs - WEAK already fires)."""
+    import hashlib
+    import base64
+    uncovered = []
+    for _pos, (attrs, text) in scripts:
+        nonce = (attrs.get("nonce") or "").strip().strip("\'\"")
+        if nonce and ("'nonce-%s'" % nonce in tokens
+                      or "nonce-%s" % nonce in tokens):
+            continue
+        digest = base64.b64encode(
+            hashlib.sha256(text.encode("utf-8")).digest()).decode()
+        if ("'sha256-%s'" % digest in tokens
+                or "sha256-%s" % digest in tokens):
+            continue
+        uncovered.append(text)
+    return uncovered
+
+
+def _header_findings(url: str, headers, mapping_data: dict,
+                         body: str = "") -> List[UnifiedFinding]:
     """HSTS/CSP/server-leak header checks for one fetched URL, plus value
     grading (weak HSTS, weak CSP, missing CSP reporting) and the remaining
     expected security headers (field report §4 rows 15, 16, 20, 21).
@@ -1333,6 +1653,11 @@ def _header_findings(url: str, headers, mapping_data: dict) -> List[UnifiedFindi
             value = lowered.get(name.lower())
         return value
 
+    try:
+        _ctype = _get("Content-Type")
+    except Exception:
+        _ctype = None
+    is_html = _ctype is None or "text/html" in str(_ctype).lower()
     hsts = _get("Strict-Transport-Security")
     if not hsts:
         out.append(_create_network_finding("NET_HSTS_MISSING", "Missing HSTS Header", "HIGH", url, f"Found Headers: {names[:5]}...", "Ensure Strict-Transport-Security is set to enforce TLS.", mapping_data))
@@ -1341,9 +1666,9 @@ def _header_findings(url: str, headers, mapping_data: dict) -> List[UnifiedFindi
         if problems:
             out.append(_create_network_finding("NET_HSTS_WEAK", "Weak HSTS Value", "LOW", url, "Strict-Transport-Security: " + str(hsts)[:200], "Use max-age=31536000 (one year) or longer plus includeSubDomains and preload (then submit to hstspreload.org); see ASVS V3.4.1.", mapping_data))
     csp = _get("Content-Security-Policy")
-    if not csp:
+    if not csp and is_html:
         out.append(_create_network_finding("NET_CSP_MISSING", "Missing CSP Header", "MEDIUM", url, "", "Add Content-Security-Policy header to prevent XSS.", mapping_data))
-    else:
+    elif csp and is_html:
         csp_text = str(csp)
         if _csp_is_weak(csp_text):
             out.append(_create_network_finding("NET_CSP_WEAK", "Weak CSP Value", "MEDIUM", url, "Content-Security-Policy: " + csp_text[:200], "Remove unsafe-inline from script-src (hash or nonce every script) or add strict-dynamic with nonces; see ASVS V3.4.3.", mapping_data))
@@ -1361,7 +1686,7 @@ def _header_findings(url: str, headers, mapping_data: dict) -> List[UnifiedFindi
     csp_all = " ".join(s for s in (str(csp) if csp else "",
                                     str(report_only) if report_only else "")
                         if s).lower()
-    if not _get("X-Frame-Options") and "frame-ancestors" not in csp_all:
+    if is_html and not _get("X-Frame-Options") and "frame-ancestors" not in csp_all:
         out.append(_create_network_finding("NET_FRAME_ANCESTORS_MISSING", "Clickjacking Protection Missing", "LOW", url, "", "Set X-Frame-Options: DENY/SAMEORIGIN or a CSP frame-ancestors directive; see ASVS V3.4.2.", mapping_data))
     try:
         server_leak = _get("Server") or _get("X-Powered-By")
@@ -1369,6 +1694,34 @@ def _header_findings(url: str, headers, mapping_data: dict) -> List[UnifiedFindi
         server_leak = None
     if server_leak:
         out.append(_create_network_finding("NET_INFO_LEAK", "Server Info Leak", "LOW", url, f"Leaked identity: {server_leak}", "Remove Server and X-Powered-By headers from the response.", mapping_data))
+    body_text = body if isinstance(body, str) else ""
+    if body_text.strip():
+        try:
+            _events = _page_scripts_and_meta(body_text)
+        except Exception:
+            _events = []
+        _metas = [(pos, pol) for kind, pos, pol in _events if kind == "meta"]
+        _scripts = [(pos, rest) for kind, pos, rest in _events if kind == "script"]
+        if _metas and not csp:
+            _first_meta = min(pos for pos, _ in _metas)
+            _early = [t for pos, (_ad, t) in _scripts if pos < _first_meta]
+            if _early:
+                out.append(_create_network_finding(
+                    "NET_META_CSP_ORDER", "Inline Script Before Meta CSP", "MEDIUM", url,
+                    "%d inline script(s) appear before the meta CSP tag and run unconstrained (no header policy present); the meta tag governs only content after it." % len(_early),
+                    "Place the meta CSP as the first element in <head> so it governs every script, or preferably enforce the policy as an HTTP header which covers the whole document; see ASVS V3.4.3.",
+                    mapping_data))
+        _policy_text = str(csp) if csp else (_metas[0][1] if _metas else "")
+        if _policy_text and _scripts:
+            _tokens = _csp_script_src_tokens(_policy_text)
+            if "'unsafe-inline'" not in _tokens and "unsafe-inline" not in _tokens:
+                _uncovered = _uncovered_inline_scripts(_scripts, _tokens)
+                if _uncovered:
+                    out.append(_create_network_finding(
+                        "NET_CSP_UNHASHED_INLINE", "Inline Script Not Covered by CSP", "MEDIUM", url,
+                        "%d uncovered inline script(s); first: %s" % (len(_uncovered), _uncovered[0][:120]),
+                        "Hash every inline script (SHA-256) into script-src, use nonces, or move code to external files; verify with hashlib against the served bytes; see ASVS V3.4.3.",
+                        mapping_data))
     return out
 
 
@@ -1560,7 +1913,8 @@ def run_network_audit(targets: list, mapping_data: dict, dast_conf: "Optional[di
     for target in targets:
         try:
             resp = requests.get(target, timeout=timeout_val, headers=headers_payload)
-            findings.extend(_header_findings(target, resp.headers, mapping_data))
+            findings.extend(_header_findings(target, resp.headers, mapping_data,
+                                             getattr(resp, "text", "") or ""))
         except Exception as e:
             findings.append(_create_network_finding("NET_REACHABILITY", "Endpoint Unreachable or SSL Error", "HIGH", target, str(e), "Ensure endpoint is online, resolvable, and has a valid TLS certificate.", mapping_data))
             continue
@@ -1578,7 +1932,8 @@ def run_network_audit(targets: list, mapping_data: dict, dast_conf: "Optional[di
                     continue
                 try:
                     findings.extend(_header_findings(
-                        crawled_url, page_resp.headers, mapping_data))
+                        crawled_url, page_resp.headers, mapping_data,
+                        getattr(page_resp, "text", "") or ""))
                 except Exception:
                     continue
         if fuzz_enabled:
@@ -2055,6 +2410,11 @@ def _write_sbom(components: list, project_license: str, sbom_conf: dict,
     default_name = ("sbom.spdx.json" if fmt == "spdx" else "sbom.cyclonedx.json")
     out_path = (sbom_conf.get("output")
                 or os.path.join(target_dir, "reports", default_name))
+    if not os.path.isabs(out_path):
+        # A relative sbom.output belongs to the target, not the process
+        # CWD - otherwise scanning another repo writes into the checkout
+        # you happened to run from (run-3 section 3.6).
+        out_path = os.path.join(target_dir, out_path)
     if fmt == "spdx":
         doc = {
             "spdxVersion": "SPDX-2.3",

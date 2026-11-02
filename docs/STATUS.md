@@ -35,6 +35,23 @@ CSP/HSTS value parsing (static + DAST), lockfile SBOM parsers, and DAST NET
 additions. Suite 368 green; scripts/docs/config HIGH gates all 0; hygiene
 exit 0. Self-triage along the way: WEB003 escalation off in `.md` prose,
 SEC011 case-insensitive, own suppressions justified.
+v2 direction set (`docs/current/v2-holistic-plan.md`, R-137–R-141):
+adversarial verification lifecycle, coverage-led hunting, and one
+holistic skill on top of the intelligence base — engine tree gains three
+planned L1 contracts (verification-lifecycle, coverage-hunting,
+holistic-skill; ADR-201/202). Build order: verdict wiring → ledger
+hunting → sandbox → skill merge → benchmark scorecard.
+2026-11-02 run3 batch (R-143–R-148,
+`docs/field-test-seancarneywebsite-2026-11-02-run3.md` P1–P9): WEB014
+(`_headers` line-length + build-output header scan), DAST meta-CSP order +
+inline-script hash verify (text/html-only doc headers), de-lexicalized
+SEC012/PRIV001/WEB009/010/012/003, WEB015/016/017 + LLM001 TS + WEB002
+scoping + SBOM out-dir, scoped `soc2-ignore[RULE-ID]` suppressions with
+report/SARIF listing, installability (marketplace, pyproject, skill-copy
+sync CI), ledger verdict wiring (P7, R-137 partial), R-142 structure debt
+cleared (11 files assigned, structure PASS). Gates: suite 399 passed,
+scripts/docs/config/.github/plugin/skills HIGH gates all 0,
+hygiene exit 0, recurspec contract + structure PASS.
 As of 2026-09-20 the ROADMAP's Ready table is down to four still-pending
 items, each with a cause: R-027 (HITRUST — genuinely blocked, no open
 machine-readable source exists), R-049 (freshness watch, no action yet —

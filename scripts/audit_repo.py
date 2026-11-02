@@ -65,8 +65,10 @@ def _warn_if_output_inside_scan(output_path: str, scan_dir: str) -> None:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="SOC 2 static compliance auditor "
-                    "(secrets, IAM, encryption, TLS, SDLC hygiene)")
+        description="AuditForge static compliance + web-posture auditor "
+                    "(secrets, IAM, encryption, TLS, SDLC hygiene, web "
+                    "security headers, API middleware baseline, privacy, LLM, "
+                    "SBOM; network/email DAST via universal_audit)")
     parser.add_argument("directory", help="Directory to audit")
     parser.add_argument("--json", action="store_true",
                         help="Print the full report as JSON")

@@ -11,7 +11,12 @@ Derives two files from the read-only knowledge-base clones (owned by
 license classification and optional cached full text,
 `build_document_catalog.py`). Also `build_rulepack.py`, which emits a
 separate host-posture rule pack for the sibling RoninAI project, sharing
-only a control-tagging convention with the other two.
+only a control-tagging convention with the other two. Also owns the
+engine-freshness pipeline: `update_engines.py` (best-effort refresh of
+scanner template/DB feeds — nuclei templates, Trivy DB; versioned binaries
+reported, never auto-upgraded) and `check_freshness.py` (live
+knowledge-stack snapshot diffed against the tracked baseline
+`scripts/freshness_manifest.json`, exit 1 on regression).
 
 Does not own: which knowledge bases are cloned or kept fresh (that's
 `docs/architecture/modules/session-updater/SYSTEM.md`, which invokes
@@ -27,7 +32,7 @@ sessions, per ROADMAP's Completed table).
 ## 3. Interface Contracts
 
 - **Inputs:** the knowledge-base clones at the workspace root (`oscal-content/`, `compliance-as-code/`, `attack-stix-data/`, `secure-controls-framework/`, `fedramp-rules/`, `asvs/`, `owasp-top10/`).
-- **Outputs:** `scripts/framework_metadata.json` (`{"frameworks": {...}, "controls": {...}}`), `scripts/document_catalog.db` (SQLite, `documents` table), optionally cached document bodies under `scripts/document_cache/` (gitignored).
+- **Outputs:** `scripts/framework_metadata.json` (`{"frameworks": {...}, "controls": {...}}`), `scripts/document_catalog.db` (SQLite, `documents` table), optionally cached document bodies under `scripts/document_cache/` (gitignored), `scripts/freshness_manifest.json` (tracked freshness baseline).
 
 ## 4. Invariants (EARS + Epistemic Stage)
 
@@ -67,10 +72,12 @@ sessions, per ROADMAP's Completed table).
 
 - **Implementation Files:** `scripts/sync_frameworks.py`,
   `scripts/build_document_catalog.py`, `scripts/build_rulepack.py`,
+  `scripts/update_engines.py`, `scripts/check_freshness.py`,
   `scripts/test_sync_frameworks.py`, `scripts/test_document_catalog.py`,
-  `scripts/test_build_rulepack.py` (test files listed here too - see
+  `scripts/test_build_rulepack.py`, `scripts/test_update_engines.py`,
+  `scripts/test_check_freshness.py` (test files listed here too - see
   auditor-core's note on why Test Surface Seam alone isn't sufficient)
-- **Test Surface Seam:** `scripts/test_sync_frameworks.py`, `scripts/test_document_catalog.py`, `scripts/test_build_rulepack.py` (run via `python -m pytest`)
+- **Test Surface Seam:** `scripts/test_sync_frameworks.py`, `scripts/test_document_catalog.py`, `scripts/test_build_rulepack.py`, `scripts/test_update_engines.py`, `scripts/test_check_freshness.py` (run via `python -m pytest`)
 
 ## 7. Measurement Seams
 
@@ -78,7 +85,8 @@ sessions, per ROADMAP's Completed table).
   secondarily, `document_cache_coverage` (155/167 eligible as of
   2026-09-09 - tracked in ROADMAP, not a hard gate).
 - **Evaluation Gate:** `python -m pytest scripts/test_sync_frameworks.py
-  scripts/test_document_catalog.py scripts/test_build_rulepack.py` (exit 0)
+  scripts/test_document_catalog.py scripts/test_build_rulepack.py
+  scripts/test_update_engines.py scripts/test_check_freshness.py` (exit 0)
 - **Correctness Backpressure:** `python scripts/sync_frameworks.py`'s own
   per-source `[+]`/`[!]` presence log + printed control/family counts,
   eyeballed against the prior run's counts for unexpected drops.

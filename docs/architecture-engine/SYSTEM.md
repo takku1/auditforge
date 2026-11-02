@@ -35,11 +35,20 @@ Non-terminal; child links below.
 - [agentic-layer](modules/agentic-layer/SYSTEM.md) — MCP server, semantic
   search index, and free vulnerability intelligence built on top of
   framework-sync's derived data.
+- [verification-lifecycle](modules/verification-lifecycle/SYSTEM.md) —
+  candidate → confirmed/needs_validation/rejected state machine,
+  adversarial review, and sandboxed PoC execution (v2, planned).
+- [coverage-hunting](modules/coverage-hunting/SYSTEM.md) — per-run
+  coverage ledger, critic waves, budget discipline, additive runs (v2,
+  planned).
+- [holistic-skill](modules/holistic-skill/SYSTEM.md) — the single
+  agent-facing skill composing all of the above into one guided or
+  full-audit workflow (v2, partially built).
 
 ## 3. Interface Contracts
 
 - **Inputs:** a target directory to scan; `config/compliance_config.yaml`; the knowledge-base clones owned by `docs/architecture/SYSTEM.md`'s tree, including `oscal-content/`, `compliance-as-code/`, `attack-stix-data/`, `secure-controls-framework/`, `fedramp-rules/`, `asvs/`, `owasp-top10/`.
-- **Outputs:** findings (text/JSON/SARIF/Markdown), `scripts/framework_metadata.json`, `scripts/document_catalog.db`, `scripts/vector_index.db`, MCP tool responses.
+- **Outputs:** findings (text/JSON/SARIF/Markdown), `scripts/framework_metadata.json`, `scripts/document_catalog.db`, `scripts/vector_index.db`, MCP tool responses, v2 run artifacts (`architecture.md`, `coverage-ledger.json`, `findings.json`, derived reports under `reports/security-audit/<repo>/run-<N>/`).
 
 ## 4. Invariants (EARS + Epistemic Stage)
 
@@ -74,6 +83,20 @@ Non-terminal; child links below.
   scripts/test_audit_repo.py scripts/test_universal_audit.py`); contracting
   it as 7 independent leaf nodes would misrepresent its actual coupling and
   invent 7 separate measurement gates where only one real one exists.
+- **ADR-201 (v2):** Adversarial verification on top of the intelligence
+  base — Cloudflare's methodology (finder ≠ checker, verdict discipline,
+  coverage ledger, sandboxed PoC-or-`needs_validation`) is adopted as three
+  new L1 modules rather than replacing anything: the deterministic engines
+  and 48k-control knowledge base are the moat, verification is the missing
+  second half. Rebuilding the skill verbatim was rejected (no compliance
+  citations, no Phase 0, Node validators); porting its methodology onto our
+  stack was chosen (teardown `docs/current/security-audit-skill-review.md`
+  §4).
+- **ADR-202 (v2):** One holistic skill — compliance, hunting, verification,
+  intel, freshness, and reporting are modes/phases of a single
+  agent-facing workflow (`holistic-skill`), because a real audit needs all
+  of them against one target in one run. Today's `security-audit` skill
+  folds in as a thin alias, not a second maintained skill.
 
 ## Child index
 
@@ -83,3 +106,6 @@ Non-terminal; child links below.
 | modules/cli-entrypoints | BUILD (trivial+stable glue) | yes |
 | modules/framework-sync | BUILD (pre-existing, field-tested) | yes |
 | modules/agentic-layer | BUILD (new, 2026-09-09) | yes |
+| modules/verification-lifecycle | BUILD (v2, planned) | no |
+| modules/coverage-hunting | BUILD (v2, planned) | no |
+| modules/holistic-skill | BUILD (v2, partially built) | no |

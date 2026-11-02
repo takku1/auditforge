@@ -749,6 +749,83 @@ class TestEmailAuth(_CloudPostureBase):
             "https://shop.test/", headers, {})}
         self.assertNotIn("NET_FRAME_ANCESTORS_MISSING", ids)
 
+    def test_header_findings_skip_doc_checks_on_non_html(self):
+        # Run-3 §4.3: one missing header CSP produced 18 rows (favicon,
+        # css, webmanifest, sitemap...). Document-level headers are only
+        # evaluated on text/html responses.
+        from auditor import scanners as _sc
+        headers = {"Content-Type": "image/png",
+                   "Strict-Transport-Security":
+                       "max-age=63072000; includeSubDomains; preload"}
+        ids = {f.rule_id for f in _sc._header_findings(
+            "https://shop.test/icon.png", headers, {}, body="PNGDATA")}
+        self.assertNotIn("NET_CSP_MISSING", ids)
+        self.assertNotIn("NET_CSP_WEAK", ids)
+        self.assertNotIn("NET_FRAME_ANCESTORS_MISSING", ids)
+        # Transport-level checks still run on non-HTML.
+        self.assertNotIn("NET_HSTS_MISSING", ids)
+
+    def test_meta_csp_pre_inline_script_flagged(self):
+        # Run-3 §4.2: a meta CSP governs only content AFTER the meta tag.
+        # With no header policy, earlier inline scripts run unconstrained.
+        from auditor import scanners as _sc
+        body = ("<html><head><script>early()</script>"
+                "<meta http-equiv=\"Content-Security-Policy\" "
+                "content=\"default-src 'self'\">"
+                "<script>late()</script></head></html>")
+        ids = {f.rule_id for f in _sc._header_findings(
+            "https://shop.test/", {}, {}, body=body)}
+        self.assertIn("NET_CSP_MISSING", ids)  # no header policy, still true
+        self.assertIn("NET_META_CSP_ORDER", ids)
+
+    def test_inline_script_hash_verified(self):
+        # Run-3 §4.2: every inline script's SHA-256 is checked against the
+        # effective script-src (header preferred, else meta, default-src
+        # fallback, nonce-aware). One covered + one uncovered script.
+        import hashlib
+        import base64
+        from auditor import scanners as _sc
+        covered_js = "console.log('covered')"
+        digest = base64.b64encode(
+            hashlib.sha256(covered_js.encode()).digest()).decode()
+        headers = {
+            "Strict-Transport-Security":
+                "max-age=63072000; includeSubDomains; preload",
+            "Content-Security-Policy":
+                "default-src 'self'; script-src 'self' 'sha256-%s'; "
+                "report-uri /csp" % digest,
+        }
+        body = ("<html><head><script>%s</script>"
+                "<script>alert('nope')</script></head></html>" % covered_js)
+        hits = [f for f in _sc._header_findings(
+            "https://shop.test/", headers, {}, body=body)
+            if f.rule_id == "NET_CSP_UNHASHED_INLINE"]
+        self.assertEqual(len(hits), 1)
+        self.assertIn("1 uncovered", hits[0].snippet)
+
+    def test_unsafe_inline_skips_hash_check(self):
+        # With 'unsafe-inline' everything runs: WEAK already fires, and a
+        # hash audit would be meaningless noise.
+        from auditor import scanners as _sc
+        headers = {"Content-Security-Policy":
+                   "default-src 'self'; script-src 'self' 'unsafe-inline'"}
+        body = "<html><head><script>alert(1)</script></head></html>"
+        ids = {f.rule_id for f in _sc._header_findings(
+            "https://shop.test/", headers, {}, body=body)}
+        self.assertIn("NET_CSP_WEAK", ids)
+        self.assertNotIn("NET_CSP_UNHASHED_INLINE", ids)
+
+    def test_nonce_covered_script_passes(self):
+        # A script carrying a nonce listed in the policy is covered.
+        from auditor import scanners as _sc
+        headers = {"Content-Security-Policy":
+                   "default-src 'self'; script-src 'nonce-abc123'"}
+        body = ('<html><head><script nonce="abc123">alert(1)</script>'
+                "</head></html>")
+        ids = {f.rule_id for f in _sc._header_findings(
+            "https://shop.test/", headers, {}, body=body)}
+        self.assertNotIn("NET_CSP_UNHASHED_INLINE", ids)
+
     def test_placeholders_and_reserved_hosts_skipped(self):
         import auditor.scanners as scanners  # noqa: E402
 
@@ -1009,6 +1086,18 @@ class TestSBOM(_CloudPostureBase):
         auditor.run_sbom_audit()
         default = os.path.join(self.root, "reports", "sbom.cyclonedx.json")
         self.assertTrue(os.path.isfile(default), default)
+
+    def test_sbom_relative_output_under_target(self):
+        # Run-3 §3.6: a relative sbom.output resolved against the process
+        # CWD, so scanning another repo wrote into the AuditForge checkout.
+        # Relative outputs resolve against the target; absolute paths stay.
+        self._write_manifests()
+        auditor = self._auditor()
+        auditor.config["sbom"] = {"enabled": True, "format": "cyclonedx",
+                                  "output": "reports/sbom.cyclonedx.json"}
+        auditor.run_sbom_audit()
+        expect = os.path.join(self.root, "reports", "sbom.cyclonedx.json")
+        self.assertTrue(os.path.isfile(expect), expect)
 
     def test_sbom_dev_dependency_marked_optional(self):
         with open(os.path.join(self.root, "package.json"), "w",

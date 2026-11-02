@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auditforge"
+version = "0.2.0"
+description = "Static compliance + web-posture auditor with a 48k-control knowledge base (SOC 2, NIST, OWASP, CIS, ...)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# Runtime needs of the auditor engine. Cloud SDKs (boto3, azure-identity,
+# google-cloud-*) stay OPTIONAL: scanners.py imports them lazily inside the
+# posture probes, so a base install audits without cloud credentials.
+dependencies = [
+    "pyyaml",
+    "requests",
+    "tomli; python_version < '3.11'",
+]
+
+[project.scripts]
+auditforge = "audit_repo:main"
+
+[project.optional-dependencies]
+cloud = ["boto3", "azure-identity", "google-cloud-resource-manager"]
+agentic = ["mcp", "sentence-transformers", "sqlite-vec"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["scripts"]
+include = ["auditor*"]
+
+[tool.setuptools]
+# Top-level entry points and the lazily-imported sibling the engine needs.
+py-modules = ["audit_repo", "vuln_intel"]

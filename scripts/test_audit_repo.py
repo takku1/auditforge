@@ -243,6 +243,32 @@ class TestDetections(AuditFixture):
         self.assertIn("WEB006", self.rule_ids(report))
         self.assertNotIn("WEB007", self.rule_ids(report))
 
+    def test_web014_headers_line_too_long(self):
+        # Run-3 §4.1: Cloudflare/workerd silently drop any _headers line
+        # over 2000 chars - a 2783-char hash CSP shipped no policy at all.
+        self.write("package.json", '{"name": "shop"}\n')
+        self.write("public/_headers",
+                   "/*\n  Content-Security-Policy: " + "x" * 2001 + "\n")
+        hits = [f for f in self.audit()["findings"] if f.rule.id == "WEB014"]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].severity, "HIGH")
+        self.assertEqual(hits[0].line, 2)
+        # A line under the limit - no finding.
+        self.write("public/_headers",
+                   "/*\n  Content-Security-Policy: " + "x" * 1971 + "\n")
+        ids = self.rule_ids(self.audit())
+        self.assertNotIn("WEB014", ids)
+
+    def test_web001_build_output_headers_discovered(self):
+        # Run-3 §4.1: dist/ is a SKIP_DIR, so the dist/_headers the CDN
+        # actually serves was invisible to presence scanning.
+        self.write("package.json", '{"name": "shop"}\n')
+        self.write("dist/_headers",
+                   "/*\n"
+                   "  Content-Security-Policy: default-src 'self'; report-uri /csp\n"
+                   "  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload\n")
+        self.assertNotIn("WEB001", self.rule_ids(self.audit()))
+
     def test_web007_csp_without_reporting(self):
         # Field report §4 row 15: a CSP with no report-uri/report-to
         # blinds the operator to real-world violations.
@@ -421,6 +447,172 @@ class TestDetections(AuditFixture):
         for rid in ("WEB009", "WEB010", "WEB011", "WEB012"):
             self.assertNotIn(rid, ids)
 
+    def test_web009_all_public_is_low(self):
+        # Run-3 §3.3: this target's APIs are intentionally public. With no
+        # privileged routes and no scattered ad-hoc checks, the missing gate
+        # is informational (LOW), not a MEDIUM gap.
+        self.write("src/pages/api/notify.ts",
+                   "export async function POST(req: Request) {\n"
+                   "  return Response.json({ ok: true });\n"
+                   "}\n")
+        self.write("src/middleware.ts",
+                   "export async function onRequest(ctx, next) {\n"
+                   "  return next();\n"
+                   "}\n")
+        hits = [f for f in self.audit()["findings"] if f.rule.id == "WEB009"]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].severity, "LOW")
+
+    def test_web009_privileged_route_is_medium(self):
+        # Run-3 §3.3: a privileged-looking route with no shared gate keeps
+        # the MEDIUM.
+        self.write("package.json", '{"name": "shop"}\n')
+        self.write("src/pages/api/admin/users.ts",
+                   "export async function POST(req: Request) {\n"
+                   "  return Response.json({ ok: true });\n"
+                   "}\n")
+        self.write("src/middleware.ts",
+                   "export async function onRequest(ctx, next) {\n"
+                   "  return next();\n"
+                   "}\n")
+        hits = [f for f in self.audit()["findings"] if f.rule.id == "WEB009"]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].severity, "MEDIUM")
+
+    def test_web009_adhoc_in_two_routes_is_medium(self):
+        # Run-3 §3.3: per-route auth checks in two files with no shared
+        # middleware gate drift - MEDIUM. (A single self-guarded route is
+        # fine and stays silent, as before.)
+        self.write("src/pages/api/a.ts",
+                   "import { verifyToken } from './auth';\n"
+                   "export async function POST(req: Request) {\n"
+                   "  verifyToken(req);\n"
+                   "  return Response.json({ ok: true });\n"
+                   "}\n")
+        self.write("src/pages/api/b.ts",
+                   "import { verifyToken } from './auth';\n"
+                   "export async function POST(req: Request) {\n"
+                   "  verifyToken(req);\n"
+                   "  return Response.json({ ok: true });\n"
+                   "}\n")
+        hits = [f for f in self.audit()["findings"] if f.rule.id == "WEB009"]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].severity, "MEDIUM")
+
+    def test_web010_catch_around_next_silences(self):
+        # Run-3 §3.2: a middleware catch around next() IS the global error
+        # handler, whatever it is named.
+        self.write("src/pages/api/notify.ts",
+                   "export async function POST(req: Request) {\n"
+                   "  return Response.json({ ok: true });\n"
+                   "}\n")
+        self.write("src/middleware.ts",
+                   "export async function onRequest(ctx, next) {\n"
+                   "  try {\n"
+                   "    return await next();\n"
+                   "  } catch (err) {\n"
+                   "    return new Response('err', { status: 500 });\n"
+                   "  }\n"
+                   "}\n")
+        ids = self.rule_ids(self.audit())
+        self.assertNotIn("WEB010", ids)
+
+    def test_web012_content_length_check_silences(self):
+        # Run-3 §3.2: reading content-length and comparing it to a number
+        # bounds the request, whatever the variable is named.
+        self.write("src/pages/api/upload.ts",
+                   "export async function POST(req: Request) {\n"
+                   "  const n = Number(req.headers.get('content-length'));\n"
+                   "  if (n > 100000) return new Response('too big', { status: 413 });\n"
+                   "  return Response.json({ ok: true });\n"
+                   "}\n")
+        self.write("src/middleware.ts",
+                   "export async function onRequest(ctx, next) {\n"
+                   "  return next();\n"
+                   "}\n")
+        self.assertNotIn("WEB012", self.rule_ids(self.audit()))
+
+    def test_web003_replaceall_downgrades(self):
+        # Run-3 §3.8: the modern .replaceAll spelling of the escape idiom
+        # is safe too.
+        self.write("app/x.js",
+                   "el.innerHTML = JSON.stringify(x).replaceAll('<', '&lt;');\n")
+        hits = [f for f in self.audit()["findings"] if f.rule.id == "WEB003"]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].severity, "LOW")
+
+    def test_llm001_typescript_sdk_system_var(self):
+        # Run-3 gap 10: the TS SDK shapes - messages.create with a variable
+        # system prompt. A static string stays silent.
+        self.write("app/chat.ts",
+                   "await client.messages.create({ model: 'x', system: userPrompt, messages });\n")
+        self.write("app/static.ts",
+                   'await client.messages.create({ model: "x", system: "You are helpful.", messages });\n')
+        hits = [f for f in self.audit()["findings"] if f.rule.id == "LLM001"]
+        self.assertEqual(len(hits), 1)
+
+    def test_web002_headers_files_only(self):
+        # Run-3 §3.7: WEB002 had no extension scope - prose mentioning the
+        # report-only header name is not a deployment.
+        self.write("app/notes.txt",
+                   "We run Content-Security-Policy-Report-Only on old pages.\n")
+        self.assertNotIn("WEB002", self.rule_ids(self.audit()))
+
+    def test_web015_method_allowlist(self):
+        # Run-3 gaps 11-14: state-changing routes with no method allowlist
+        # (405 / req.method check) accept any verb.
+        self.write("src/pages/api/notify.ts",
+                   "export async function POST(req: Request) {\n"
+                   "  return Response.json({ ok: true });\n"
+                   "}\n")
+        self.write("src/middleware.ts",
+                   "export async function onRequest(ctx, next) {\n"
+                   "  return next();\n"
+                   "}\n")
+        hits = [f for f in self.audit()["findings"] if f.rule.id == "WEB015"]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].severity, "MEDIUM")
+        self.write("src/middleware.ts",
+                   "export async function onRequest(ctx, next) {\n"
+                   "  if (req.method !== 'POST') return new Response('no', { status: 405 });\n"
+                   "  return next();\n"
+                   "}\n")
+        self.assertNotIn("WEB015", self.rule_ids(self.audit()))
+
+    def test_web016_content_type_check(self):
+        # Run-3 gaps 11-14: no content-type validation (415) on a
+        # state-changing route.
+        self.write("src/pages/api/upload.ts",
+                   "export async function POST(req: Request) {\n"
+                   "  return Response.json({ ok: true });\n"
+                   "}\n")
+        self.write("src/middleware.ts",
+                   "export async function onRequest(ctx, next) {\n"
+                   "  return next();\n"
+                   "}\n")
+        hits = [f for f in self.audit()["findings"] if f.rule.id == "WEB016"]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0].severity, "LOW")
+        self.write("src/middleware.ts",
+                   "export async function onRequest(ctx, next) {\n"
+                   "  if (req.headers.get('content-type') !== 'application/json')\n"
+                   "    return new Response('bad', { status: 415 });\n"
+                   "  return next();\n"
+                   "}\n")
+        self.assertNotIn("WEB016", self.rule_ids(self.audit()))
+
+    def test_web017_security_txt_missing(self):
+        # Run-3 gap 19: no security.txt anywhere the scanner can see.
+        self.write("package.json", '{"name": "shop"}\n')
+        self.write("src/pages/api/notify.ts",
+                   "export async function POST(req: Request) {\n"
+                   "  return Response.json({ ok: true });\n"
+                   "}\n")
+        self.assertIn("WEB017", self.rule_ids(self.audit()))
+        self.write("public/.well-known/security.txt",
+                   "Contact: mailto:security@shop.test\n")
+        self.assertNotIn("WEB017", self.rule_ids(self.audit()))
+
     def test_web_baseline_lane_fires_when_bare(self):
         # Same route with a bare middleware: all four baseline gaps fire.
         self.write("src/pages/api/notify.ts",
@@ -450,6 +642,95 @@ class TestDetections(AuditFixture):
         self.assertEqual(len(bare), 1)
         self.assertEqual(bare[0].severity, "LOW")
         self.assertEqual(bare[0].line, 1)
+
+    def test_sec012_guard_comparison_silent(self):
+        # Run-3 §3.1: SEC012 flagged its own mitigation. A comparison or
+        # membership test against '__proto__' is the guard, not the sink;
+        # only write contexts (bracket-assign, literal key, assign-merge)
+        # fire.
+        self.write("app/guard.js",
+                   "if (field === '__proto__') return;\n"
+                   "if (seen.has('__proto__')) return;\n")
+        self.assertNotIn("SEC012", self.rule_ids(self.audit()))
+        self.write("app/merge2.js",
+                   "Object.assign(tgt, {__proto__: val});\n")
+        hits = [f for f in self.audit()["findings"] if f.rule.id == "SEC012"]
+        self.assertEqual(len(hits), 1)
+
+    def test_priv001_consent_gated_suppressed(self):
+        # Run-3 §3.2: a loader behind a consent predicate is compliant -
+        # suppress when the enclosing ~15 lines carry a consent signal.
+        self.write("site/consent.js",
+                   "function loadAnalytics() {\n"
+                   "  if (hasConsent('analytics')) {\n"
+                   "    const s = document.createElement('script');\n"
+                   "    s.src = 'https://www.googletagmanager.com/gtag/js?id=G-X';\n"
+                   "    document.head.appendChild(s);\n"
+                   "  }\n"
+                   "}\n")
+        self.assertNotIn("PRIV001", self.rule_ids(self.audit()))
+
+    def test_priv003_localstorage_and_eviction(self):
+        # Run-3 §3.4: localStorage persists indefinitely, so it is the
+        # more GDPR-relevant store. A namespace prefix plus a bulk-clear
+        # helper (Object.keys(localStorage) + removeItem) is the eviction
+        # path and suppresses the finding.
+        self.write("app/state2.ts",
+                   'localStorage.setItem("prefs", v);\n')
+        hits = [f for f in self.audit()["findings"] if f.rule.id == "PRIV003"]
+        self.assertEqual(len(hits), 1)
+        self.write("app/state2.ts",
+                   'localStorage.setItem("shop:prefs", v);\n'
+                   "export function clearShop() {\n"
+                   "  for (const k of Object.keys(localStorage)) {\n"
+                   "    if (k.startsWith('shop:')) localStorage.removeItem(k);\n"
+                   "  }\n"
+                   "}\n")
+        self.assertNotIn("PRIV003", self.rule_ids(self.audit()))
+
+    def test_suppression_scoped_to_named_rule(self):
+        # Run-3 §3.10: soc2-ignore[RULE]: reason suppresses only that rule.
+        # A token scoped elsewhere leaves this finding standing.
+        self.write("app/keys.py",
+                   'KEY = "AKIA' 'IOSFODNN7X4K9Q2X"  # soc2-ignore[SEC001]: test vector\n')
+        self.assertIn("SEC002", self.rule_ids(self.audit()))
+
+    def test_suppression_scoped_match_recorded(self):
+        # The matching scoped suppression silences the finding AND records
+        # it (file, line, rule, reason) for the report.
+        self.write("app/keys.py",
+                   'KEY = "AKIAIOSFODNN7X4K9Q2X"  # soc2-ignore[SEC002]: test vector\n')
+        report = self.audit()
+        self.assertNotIn("SEC002", self.rule_ids(report))
+        self.assertEqual(report["suppressions"], [{
+            "file": "app/keys.py", "line": 1, "rule_id": "SEC002",
+            "reason": "test vector", "justified": True,
+        }])
+
+    def test_suppressions_listed_in_markdown(self):
+        # Run-3 §4.4: suppressions are audit evidence, not silent holes.
+        self.write("app/keys.py",
+                   'KEY = "AKIAIOSFODNN7X4K9Q2X"  # soc2-ignore[SEC002]: test vector\n')
+        from auditor import reporting as _rep
+        md = _rep.to_markdown(self.audit())
+        self.assertIn("## Suppressions", md)
+        self.assertIn("SEC002", md)
+        self.assertIn("test vector", md)
+
+    def test_suppressions_listed_in_sarif(self):
+        # SARIF has suppressions[] for exactly this: the finding exists as
+        # a result with level none, marked inSource with justification.
+        import json as _json
+        self.write("app/keys.py",
+                   'KEY = "AKIAIOSFODNN7X4K9Q2X"  # soc2-ignore[SEC002]: test vector\n')
+        from auditor import reporting as _rep
+        sarif = _json.loads(_rep.to_sarif(self.audit()))
+        results = sarif["runs"][0]["results"]
+        matches = [r for r in results if r["ruleId"] == "SEC002"]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["level"], "none")
+        self.assertEqual(matches[0]["suppressions"],
+                         [{"kind": "inSource", "justification": "test vector"}])
 
     def test_sec010_mail_header_injection(self):
         # Field report §4 row 1 (HIGH): request data into mail headers.

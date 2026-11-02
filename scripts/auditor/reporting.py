@@ -104,7 +104,8 @@ def to_json(report: dict) -> str:
 def to_sarif(report: dict) -> str:
     sarif_level = {"CRITICAL": "error", "HIGH": "error",
                    "MEDIUM": "warning", "LOW": "note"}
-    rules_used = sorted({f.rule.id for f in report["findings"]})
+    rules_used = sorted({f.rule.id for f in report["findings"]} |
+                      {s["rule_id"] for s in report.get("suppressions") or []})
     sarif = {
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/"
                    "master/Schemata/sarif-schema-2.1.0.json",
@@ -134,7 +135,23 @@ def to_sarif(report: dict) -> str:
                         "region": {"startLine": f.line},
                     },
                 }],
-            } for f in report["findings"]],
+            } for f in report["findings"]] + [{
+                "ruleId": s["rule_id"],
+                "level": "none",
+                "message": {"text": "Suppressed %s finding at %s:%d (%s)" % (
+                    s["rule_id"], s["file"], s["line"],
+                    s["reason"] or "no reason given")},
+                "partialFingerprints": {"soc2AuditFingerprint": "suppressed-%s-%s-%d" % (
+                    s["rule_id"], s["file"], s["line"])},
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": s["file"]},
+                        "region": {"startLine": s["line"]},
+                    },
+                }],
+                "suppressions": [{"kind": "inSource",
+                                  "justification": s["reason"] or "unjustified suppression"}],
+            } for s in (report.get("suppressions") or [])],
         }],
     }
     return json.dumps(sarif, indent=2)
@@ -169,6 +186,20 @@ def to_markdown(report: dict) -> str:
             lines.append(f"| {f.rule.id} {f.rule.name} "
                          f"| {', '.join(rule_frameworks(f.rule))} "
                          f"| `{f.file}:{f.line}` | `{snippet}` |")
+        lines.append("")
+    supp = report.get("suppressions") or []
+    if supp:
+        lines += ["## Suppressions (%d)" % len(supp), "",
+                  "Inline suppressions are audit evidence, not silent holes: "
+                  "each row names what was silenced, where, and why.",
+                  "",
+                  "| Rule | Location | Justified | Reason |",
+                  "| --- | --- | --- | --- |"]
+        for item in supp:
+            reason = (item["reason"] or "-").replace("|", "\\|").replace("`", "'")
+            lines.append("| %s | `%s:%d` | %s | `%s` |" % (
+                item["rule_id"], item["file"], item["line"],
+                "yes" if item["justified"] else "NO - add a reason", reason))
         lines.append("")
     return "\n".join(lines)
 

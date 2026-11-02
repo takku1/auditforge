@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import validate_findings as vf
 import validate_coverage_ledger as vc
+import sync_skills
 
 
 def _trace():
@@ -191,3 +192,27 @@ def test_ledger_main_exit_codes(tmp_path, capsys):
     assert vc.main([str(p)]) == 0  # empty ledger is valid
     p.write_text("{}", encoding="utf-8")
     assert vc.main([str(p)]) == 1
+
+
+# skill-copy sync ----------------------------------------------------------
+# The distributable plugin carries generated copies of the canonical
+# `.claude/skills/*/SKILL.md` files (plus a provenance callout).
+# `scripts/sync_skills.py` regenerates them; this test (and therefore CI,
+# which runs the suite) fails on drift.
+
+def _skill_paths(skill):
+    root = Path(__file__).resolve().parent.parent
+    return (root / ".claude" / "skills" / skill / "SKILL.md",
+            root / "plugin" / "auditforge" / "skills" / skill / "SKILL.md")
+
+
+@pytest.mark.parametrize("skill", ["auditforge", "security-audit"])
+def test_skill_copies_in_sync(skill):
+    canon, copy = _skill_paths(skill)
+    assert canon.is_file(), canon
+    assert copy.is_file(), copy
+    expected = sync_skills.render(
+        skill, canon.read_text(encoding="utf-8"))
+    assert copy.read_text(encoding="utf-8") == expected, (
+        "plugin copy drifted - regenerate with: "
+        "python scripts/sync_skills.py")

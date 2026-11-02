@@ -8,7 +8,10 @@ The shared detection engine: regex rules tagged to SOC 2 controls
 (`rules.py`), the file-walking/matching logic (`scanners.py`), the
 `Finding`/`Rule`/`UnifiedFinding` data model (`models.py`), report rendering
 in four formats (`reporting.py`), baseline diffing (`baseline.py`), and the
-external-scanner orchestrator (`orchestrator.py`). Both CLI entrypoints
+external-scanner orchestrator (`orchestrator.py`), and policy-document
+coverage auditing (`policy_audit.py` — required-policy catalog vs the
+governance docs actually present, citations live from framework-sync's
+index). Both CLI entrypoints
 (see [cli-entrypoints](../cli-entrypoints/SYSTEM.md)) call into this package;
 neither duplicates detection logic.
 
@@ -72,13 +75,15 @@ tests, `docs/field-test-roninai-2026-08-25.md` and
   `scripts/auditor/models.py`, `scripts/auditor/rules.py`,
   `scripts/auditor/scanners.py`, `scripts/auditor/reporting.py`,
   `scripts/auditor/orchestrator.py`, `scripts/auditor/baseline.py`,
-  `scripts/test_audit_repo.py`, `scripts/test_universal_audit.py` (the two
+  `scripts/policy_audit.py`,
+  `scripts/test_audit_repo.py`, `scripts/test_universal_audit.py`,
+  `scripts/test_policy_audit.py` (the three
   test files are listed here too, not just in Test Surface Seam below -
   recurspec's structure gate only exempts a file's own public symbols from
   `structure.public.uncontracted` via an Implementation Files declaration,
   Test Surface Seam alone only satisfies the separate
   `structure.test.uncontracted`/`structure.test_surface.missing` checks)
-- **Test Surface Seam:** `scripts/test_audit_repo.py`, `scripts/test_universal_audit.py` (run via `python -m pytest`)
+- **Test Surface Seam:** `scripts/test_audit_repo.py`, `scripts/test_universal_audit.py`, `scripts/test_policy_audit.py` (run via `python -m pytest`)
 
 ## 7. Measurement Seams
 
@@ -86,7 +91,7 @@ tests, `docs/field-test-roninai-2026-08-25.md` and
   no dedicated `measure.ps1` exists; the pytest exit code is the real gate
   today, stated honestly rather than inventing a script that doesn't exist.
 - **Evaluation Gate:** `python -m pytest scripts/test_audit_repo.py
-  scripts/test_universal_audit.py` (exit 0)
+  scripts/test_universal_audit.py scripts/test_policy_audit.py` (exit 0)
 - **Correctness Backpressure:** `python scripts/audit_repo.py scripts/
   --min-severity MEDIUM` (self-scan; CLAUDE.md Review Loop mandate)
 - **Telemetry Surface:** none (local CLI tool, no telemetry by design —

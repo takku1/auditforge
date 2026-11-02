@@ -1,0 +1,14 @@
+{
+  "name": "auditforge-marketplace",
+  "description": "AuditForge security + compliance skills and commands (Muse native; Claude Code manifest alongside).",
+  "owner": {
+    "name": "AuditForge"
+  },
+  "plugins": [
+    {
+      "name": "auditforge",
+      "source": "./plugin/auditforge",
+      "description": "Static compliance + web-posture auditor, coverage-led hunting skill, and control-search MCP server."
+    }
+  ]
+}

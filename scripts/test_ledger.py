@@ -65,6 +65,45 @@ def test_manual_resolve_and_stats(db, capsys):
     assert stats["runs"] == 1
 
 
+def test_verdict_lifecycle(db, capsys):
+    # v2 step 1: deterministic findings enter unreviewed; a verification
+    # verdict sticks; re-ingest without verdicts preserves it (additive).
+    _ingest(db, "shop", "r1", _report("fp1"))
+    capsys.readouterr()
+    assert ledger.main(["--db", db, "verdict", "--repo", "shop",
+                        "--fingerprint", "fp1", "--verdict", "confirmed",
+                        "--run-id", "v1", "--reason", "repro passes"]) == 0
+    capsys.readouterr()
+    _ingest(db, "shop", "r2", _report("fp1"))
+    capsys.readouterr()
+    assert ledger.main(["--db", db, "list", "--repo", "shop",
+                        "--verdict", "confirmed", "--format", "json"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert len(rows) == 1 and rows[0]["verdict"] == "confirmed"
+    assert rows[0]["verdict_reason"] == "repro passes"
+
+
+def test_ingest_carries_item_verdict(db, capsys):
+    # A verification run's findings.json already carries verdicts.
+    rec = _report("fp9")["findings"][0]
+    rec["verdict"] = "needs_validation"
+    rec["blockers"] = ["need prod config"]
+    _ingest(db, "shop", "r1", {"findings": [rec]})
+    capsys.readouterr()
+    assert ledger.main(["--db", db, "list", "--repo", "shop",
+                        "--verdict", "needs_validation",
+                        "--format", "json"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert len(rows) == 1 and rows[0]["fingerprint"] == "fp9"
+
+
+def test_verdict_rejects_bad_value(db):
+    with pytest.raises(SystemExit):
+        ledger.main(["--db", db, "verdict", "--repo", "shop",
+                     "--fingerprint", "fp1", "--verdict", "maybe",
+                     "--run-id", "v1"])
+
+
 def test_universal_findings_get_stable_fingerprint(db, capsys):
     uni = {"findings": [{"rule_id": "R1", "tool": "Semgrep", "name": "x",
                          "severity": "HIGH", "file": "a.js", "line": 3,

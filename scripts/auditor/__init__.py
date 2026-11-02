@@ -34,11 +34,13 @@ def audit_directory(root: str, excludes: list = None, min_severity: str = "LOW",
     disabled_rules = disabled_rules or set()
     pii_allow = pii_allow or []
     findings = []
+    suppressions = []
     files_scanned = 0
     skipped = {"oversized": 0, "binary": 0, "unreadable": 0}
     for path, rel in iter_files(root, excludes):
         files_scanned += 1
-        file_findings, skip_reason = scan_file(path, rel, pii_allow)
+        file_findings, skip_reason = scan_file(path, rel, pii_allow,
+                                              suppressions)
         if skip_reason:
             skipped[skip_reason] += 1
         findings.extend(file_findings)
@@ -74,4 +76,6 @@ def audit_directory(root: str, excludes: list = None, min_severity: str = "LOW",
         "skipped": skipped,
         "summary": summary,
         "findings": findings,
+        "suppressions": sorted(suppressions,
+                              key=lambda d: (d["file"], d["line"], d["rule_id"])),
     }

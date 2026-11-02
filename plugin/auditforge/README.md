@@ -16,6 +16,11 @@ control-search MCP server. Installs elsewhere with:
 ## Layout
 
 - `.muse-plugin/plugin.json` - manifest (skills + commands + mcpServers).
+- `.claude-plugin/plugin.json` - skeleton Claude Code manifest (same skills +
+  commands; extend when the marketplace repo location is decided - see
+  `docs/current/tooling-direction.md` §5).
+- `../../.claude-plugin/marketplace.json` - skeleton marketplace index
+  pointing at this plugin directory.
 - `skills/auditforge/SKILL.md`, `skills/security-audit/SKILL.md` - plugin
   copies; canonical sources live in `.claude/skills/` - reconcile on bump.
 - `commands/audit.md` - full-sweep audit (default) with a fast-subset flag.

@@ -1,0 +1,7 @@
+{
+  "name": "auditforge",
+  "version": "0.2.0",
+  "description": "Static compliance + web-posture auditor, coverage-led hunting skill, and control-search MCP server.",
+  "skills": "./skills/",
+  "commands": "./commands/"
+}
