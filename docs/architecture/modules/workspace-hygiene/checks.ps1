@@ -37,7 +37,7 @@ $local = @(Get-ChildItem (Join-Path $root 'scripts') -Filter '*.py' |
     @(Get-ChildItem (Join-Path $root 'scripts') -Directory |
         Select-Object -ExpandProperty Name)
 $stdlib = @('os','json','re','sys','subprocess','argparse','pathlib','typing','unittest',
-            'tempfile','shutil','datetime','urllib','contextlib','__future__','hashlib','sqlite3','concurrent','threading','ssl','socket','ipaddress','fnmatch','csv','xml','zipfile','copy','html','io','time','stat','enum','dataclasses','functools','collections','base64','textwrap')
+            'tempfile','shutil','datetime','urllib','contextlib','__future__','hashlib','sqlite3','concurrent','threading','ssl','socket','ipaddress','fnmatch','csv','xml','zipfile','copy','html','io','time','stat','enum','dataclasses','functools','collections','base64','textwrap','ast','shlex','uuid')
 $imports = Get-ChildItem (Join-Path $root 'scripts') -Filter '*.py' |
     Get-Content | ForEach-Object {
         if ($_ -cmatch '^\s*import\s+([a-zA-Z_][a-zA-Z0-9_]*)') { $Matches[1].ToLower() }

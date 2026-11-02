@@ -70,7 +70,9 @@ _MODEL_OUTPUT_RE = re.compile(
 )
 def _suppression_scope(line_text: str):
     """Rule IDs named by soc2-ignore[RULE,...], or None when unscoped
-    (an unscoped token suppresses every rule on the line). Run-3 §3.10."""
+    (an unscoped token suppresses every rule on the line). Run-3 §3.10.
+    A scoped token anywhere on the line wins: a bare token on the same
+    line does NOT widen a scoped suppression (probe-verified)."""
     m = re.search(r"soc2-ignore\s*\[([A-Za-z0-9_,\s-]+)\]", line_text)
     if not m:
         return None

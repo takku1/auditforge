@@ -22,7 +22,7 @@ ledger (`ledger.py`), security-audit skill + validators, native plugin
 coverage audit (`policy_audit.py` + 15-policy catalog + `audit_policy_docs`
 tool; self-run 14 present / 1 partial / 0 missing-must), `walk_target`
 hardened against unstatable entries (WinError 1920), MCP tools for
-gap/ledger/validators/freshness (16 tools total), plugin skill copies
+gap/ledger/validators/freshness (19 tools total), plugin skill copies
 resynced and revalidated. Suite 323 green, self-audit 0 HIGH, hygiene
 exit 0.
 2026-11-02 field-test batch (R-130–R-135,
@@ -52,6 +52,16 @@ sync CI), ledger verdict wiring (P7, R-137 partial), R-142 structure debt
 cleared (11 files assigned, structure PASS). Gates: suite 399 passed,
 scripts/docs/config/.github/plugin/skills HIGH gates all 0,
 hygiene exit 0, recurspec contract + structure PASS.
+2026-11-02 R-137/R-138 milestone: `ledger.py` gains a `transitions` table,
+fail-closed verdict guards (finder≠verifier, confirmed-needs-evidence,
+same-verifier material replacement rejected, exit 3), and ingest-time
+material-change demotion; `scripts/poc_sandbox.py` is the hardened Docker
+PoC runner (network-none, resource cage, cap-drop, read-only rootfs,
+two-mount boundary, `--record` never confirms, refusal exits 4).
+Skill inventory corrected 16→19 with an AST-vs-prose drift gate; ROADMAP
+Ready holds only actionable rows (R-027/049/058/123/124/139/140/141).
+Remaining v2: coverage-hunting (R-139), skill merge (R-140), benchmark
+scorecard (R-141).
 As of 2026-09-20 the ROADMAP's Ready table is down to four still-pending
 items, each with a cause: R-027 (HITRUST — genuinely blocked, no open
 machine-readable source exists), R-049 (freshness watch, no action yet —

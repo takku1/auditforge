@@ -412,6 +412,35 @@ def test_validate_coverage_ledger_report_returns_rc(tmp_path):
     assert "validate_coverage_ledger.py" in m.call_args.args[0][1]
 
 
+def test_skill_tool_inventory_matches_server():
+    # R-150: the canonical skill's tool inventory is checked against the
+    # actual @server.tool() registrations - a 16-vs-19 style drift between
+    # prose and code must fail loudly instead of rotting.
+    import ast as _ast
+    import re as _re
+    here = Path(__file__).resolve().parent
+    tree = _ast.parse((here / "mcp_server.py").read_text(encoding="utf-8"))
+    registered = set()
+    for node in _ast.walk(tree):
+        if not isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+            continue
+        for dec in node.decorator_list:
+            if (isinstance(dec, _ast.Call)
+                    and isinstance(dec.func, _ast.Attribute)
+                    and dec.func.attr == "tool"
+                    and isinstance(dec.func.value, _ast.Name)
+                    and dec.func.value.id == "server"):
+                registered.add(node.name)
+    assert registered, "no @server.tool() registrations found"
+    skill = (here.parent / ".claude" / "skills" / "auditforge"
+             / "SKILL.md").read_text(encoding="utf-8")
+    block = next(b for b in skill.split("\n\n") if "Prefer the MCP tools" in b)
+    inventoried = set(_re.findall(r"`([a-z_]+)`", block))
+    assert inventoried == registered, (
+        "skill inventory drift: missing=%s phantom=%s"
+        % (sorted(registered - inventoried), sorted(inventoried - registered)))
+
+
 def test_check_freshness_text_fallback():
     import subprocess as _sp
     mock_result = _sp.CompletedProcess(args=[], returncode=0,

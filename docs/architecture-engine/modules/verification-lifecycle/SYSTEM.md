@@ -19,16 +19,21 @@ Does not own: candidate discovery (auditor-core's engines, hunters'
 judgment), compliance citation text (framework-sync's), report rendering
 (reporting.py renders; this module decides what is reportable).
 
-Status: partially built. Schema + validators exist (R-133 ports) and
-`scripts/ledger.py` is the finding store with verdict/disproof columns
-(P7 ledger-verdict wiring); the state-machine transitions, adversarial
-protocol enforcement, and sandbox backend do not yet.
+Status: mostly built (R-137/R-138, 2026-11-02). Schema + validators
+exist (R-133 ports); `scripts/ledger.py` is the finding store with
+verdict/disproof columns (P7), a `transitions` table, fail-closed verdict
+guards (finder≠verifier, confirmed-needs-evidence,
+rejected/needs_validation-need-reason, same-verifier material replacement
+rejected), and ingest-time material-change demotion; `scripts/poc_sandbox.py`
+is the Docker-only hardened PoC runner with refuse-to-run. Still open:
+non-Docker sandbox backends (gVisor/bubblewrap Linux ladder) and the
+two-model cross-check upgrade (single-model fresh-context is the v2 bar).
 
 ## 2. Sub-System Decomposition
 
-Atomic leaf (BUILD — partially built: the ledger-store seam exists;
-the sub-areas below stay prose until code with its own test seam exists,
-per ADR-102: no invented nodes without seams).
+Atomic leaf (BUILD — the ledger-store and poc-sandbox seams exist;
+the remaining sub-areas below stay prose until code with its own test
+seam exists, per ADR-102: no invented nodes without seams).
 
 Planned sub-areas (not nodes yet): `verdicts` (state machine + schema
 enforcement), `adversarial-review` (fresh-context assignment,
@@ -70,6 +75,25 @@ material-replacement re-verification, two-model cross-check),
   (critical = unauth code exec / full data-store takeover), never from
   checklist deviation; `overall <= impact` always holds.
   - `EvidenceStage:` Unknown
+- **[Ubiquitous]** THE SYSTEM SHALL reject a `verdict` command whose
+  `--verifier` equals the finding's recorded `finder`, exit 3, and record
+  nothing (`test_verdict_rejects_self_verification`).
+  - `EvidenceStage:` Sampled
+- **[Ubiquitous]** THE SYSTEM SHALL require `--evidence` for `confirmed`
+  and `--reason` for every verdict transition, exit 3 otherwise, and
+  append every accepted transition to the `transitions` table
+  (`test_verdict_transition_logged` and the guard tests).
+  - `EvidenceStage:` Sampled
+- **[Conditional]** IF a re-ingest changes a `confirmed`/`rejected`
+  finding's evidence fields (file/line/snippet) THEN THE SYSTEM SHALL
+  demote it to `needs_validation` with a material-change reason and log
+  the transition (`test_material_change_demotes_confirmed`).
+  - `EvidenceStage:` Sampled
+- **[Conditional]** IF `poc_sandbox` has no working backend or image THEN
+  it SHALL exit 4 with a `needs_validation` payload and SHALL NOT execute
+  anything; `--record` writes only `needs_validation`, never `confirmed`
+  (`test_refusal_without_backend`, `test_refusal_records_needs_validation`).
+  - `EvidenceStage:` Sampled
 
 ## 5. Architectural Decisions (ADRs)
 
@@ -95,15 +119,19 @@ material-replacement re-verification, two-model cross-check),
 
 - **Implementation Files:** `scripts/ledger.py`,
   `scripts/test_ledger.py` (SQLite store keyed by (repo, fingerprint);
-  verdict/disproof columns and the
-  `verdict`/`list --verdict`/`stats --by-verdict` seam, P7).
-- **Test Surface Seam:** `scripts/test_ledger.py` (run via
-  `python -m pytest`; verdict-machine/adversarial/sandbox tests still
-  planned).
-- Still planned: verdict-machine unit tests (including
-  malformed-verifier-output rejection and budget-`incomplete` run_status),
-  adversarial-assignment tests (finder-context exclusion), sandbox refusal
-  tests (no-backend → `needs_validation`, no execution).
+  verdict/disproof/finder/evidence columns; `verdict` /
+  `list --verdict` / `stats --by-verdict` / `transitions` seam; ingest
+  demotion on material change), `scripts/poc_sandbox.py`,
+  `scripts/test_poc_sandbox.py` (hardened Docker runner: network-none,
+  resource cage, cap-drop, read-only rootfs, two-mount boundary,
+  pre-pulled images only; refusal exits 4 with a needs_validation
+  payload; `--record` never confirms).
+- **Test Surface Seam:** `scripts/test_ledger.py`,
+  `scripts/test_poc_sandbox.py` (run via `python -m pytest`; includes
+  guard-violation, self-verification, demotion, migration, refusal,
+  flag-hardening, timeout-kill, and fixture-to-confirmed e2e tests).
+- Still planned: non-Docker backends, two-model cross-check; the
+  budget-`incomplete` run_status rule belongs to coverage-hunting.
 
 ## 7. Measurement Seams
 
@@ -111,10 +139,12 @@ material-replacement re-verification, two-model cross-check),
   per run like the VDH harness (their 20,799 → 12,057 → 7,245) — a
   collapsing survival rate means the hunters are noisy, not that the
   verifiers are strict.
-- **Evaluation Gate (planned):** `validate_findings.py` exit 0 on every
-  `findings.json`; `python -m pytest scripts/test_ledger.py` (exit 0,
-  store seam); pytest suite for the state machine; one sandboxed-PoC
-  end-to-end on juice-shop (already cloned as the auditor's test target).
+- **Evaluation Gate:** `validate_findings.py` exit 0 on every
+  `findings.json`; `python -m pytest scripts/test_ledger.py
+  scripts/test_poc_sandbox.py` (exit 0); one fixture-to-confirmed e2e in
+  `test_poc_sandbox.py` (stub-backend, no daemon needed); one
+  sandboxed-PoC end-to-end on juice-shop stays the live-backend proof
+  (already cloned as the auditor's test target; needs a real daemon).
 - **Correctness Backpressure:** shallow-run detection — a run with zero
   candidates requeues hunting rather than reporting "clean".
 - **Telemetry Surface:** none (local runs, no telemetry by design).
