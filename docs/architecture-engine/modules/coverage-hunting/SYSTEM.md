@@ -18,10 +18,16 @@ Does not own: verdicts on what hunters find (verification-lifecycle's),
 the domain control catalogs themselves (framework-sync's), hunter judgment
 (the skill's prompts).
 
-Status: partially built. `validate_coverage_ledger.py` +
-`gap_analysis.py` (12-domain must-build profiles over
-`scripts/gap_profiles.json`, ADR-211) exist; the per-run ledger, critics,
-budget discipline, and additive-run rules do not yet.
+Status: mostly built (R-139, 2026-11-02). `validate_coverage_ledger.py`
++ `gap_analysis.py` (12-domain must-build profiles over
+`scripts/gap_profiles.json`, ADR-211) exist, plus `scripts/coverage.py`:
+`init` partitions recon into validator-clean units, `critic` lists
+unworked/unevidenced/unsubstantiated/unreasoned units, `budget` accounts
+waves/attempts against quick/standard/deep profiles with reserve check,
+`carry` stamps additive prior_status rules, `union` joins units with
+gap-report posture by evidence-path overlap. Still open: agent-run hunter
+and critic waves, skill-side budget enforcement (incomplete declaration),
+and the juice-shop trial run.
 
 ## 2. Sub-System Decomposition
 
@@ -52,8 +58,10 @@ every hunter wave; unassigned units explicitly `deferred`),
   dropped; "scanned clean" is distinguishable from "never looked at".
   - `EvidenceStage:` Unknown
 - **[Ubiquitous]** THE SYSTEM SHALL validate the ledger after creating it
-  and after every later update (`validate_coverage_ledger.py` exit 0).
-  - `EvidenceStage:` Unknown
+  and after every later update (`validate_coverage_ledger.py` exit 0;
+  `coverage.py init`/`carry` outputs are asserted validator-clean in
+  `test_coverage.py`).
+  - `EvidenceStage:` Sampled
 - **[Conditional]** IF the run budget is exhausted THEN THE SYSTEM SHALL
   mark remaining units `deferred`, never thin evidence silently; a run that
   cannot cover its reserve (recon + critics + validation) SHALL declare
@@ -91,10 +99,12 @@ every hunter wave; unassigned units explicitly `deferred`),
 - **Implementation Files:** `scripts/gap_analysis.py`,
   `scripts/test_gap_analysis.py` (the domain-profile half: target
   capabilities vs repo evidence, framework citations live from
-  framework-sync's index).
-- **Test Surface Seam:** `scripts/test_gap_analysis.py` (run via
-  `python -m pytest`; per-run-ledger/critic/budget/additive tests still
-  planned).
+  framework-sync's index), `scripts/coverage.py`,
+  `scripts/test_coverage.py` (per-run ledger tooling: init/critic/
+  budget/carry/union over `coverage-ledger.json`).
+- **Test Surface Seam:** `scripts/test_gap_analysis.py`,
+  `scripts/test_coverage.py` (run via `python -m pytest`; init output
+  asserted validator-clean, carry outputs re-validated).
 - Still planned: ledger-state tests (no silent
 drops — every seeded unit accounted for), validator-after-mutation tests,
 budget-exhaustion tests (`deferred`, never thinned), additive-run tests
@@ -106,9 +116,10 @@ budget-exhaustion tests (`deferred`, never thinned), additive-run tests
   per wave) and gapfill yield (critic-found units that produce candidates)
   — Cloudflare's coverage-cell growth on held-out repos is the precedent.
 - **Evaluation Gate (planned):** `validate_coverage_ledger.py` exit 0;
-  `python -m pytest scripts/test_gap_analysis.py` (exit 0); pytest for
-  state machine + critics on fixture repos; juice-shop full-run ledger
-  review (eyeballed once, then fixture-locked).
+  `python -m pytest scripts/test_gap_analysis.py
+  scripts/test_coverage.py` (exit 0); pytest for agent-run hunter/critic
+  waves on fixture repos; juice-shop full-run ledger review (eyeballed
+  once, then fixture-locked).
 - **Correctness Backpressure:** the `deferred`-with-reason list is reviewed,
   not just the findings — a growing deferred list with boilerplate reasons
   means the budget model is wrong.

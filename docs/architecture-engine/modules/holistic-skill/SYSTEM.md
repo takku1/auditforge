@@ -26,10 +26,14 @@ transition (ADR-222).
 Does not own: detection logic, verdicts, coverage state, control data —
 only the workflow that binds them and the prose that drives the agent.
 
-Status: partially built — `.claude/skills/security-audit/SKILL.md` (six
-phases + Phase 0 + compliance citations + validators) and the plugin
-wrapper exist; the merge to one skill, ledger/verification wiring, and
-budget profiles do not yet.
+Status: merged 2026-11-02 (R-140) — the six phases live in the
+canonical `auditforge` skill (recon → `coverage.py init`, critic/budget
+waves, fresh-context verification with documented disproof attempts,
+`ledger.py verdict` guards, `poc_sandbox.py`, derived reporting,
+`coverage.py carry` additive runs); `security-audit` is a thin alias.
+Still open: the single-agent fallback quality bar (first fallback run
+decides), and the juice-shop head-to-head that exercises the whole
+workflow (R-141).
 
 ## 2. Sub-System Decomposition
 
@@ -91,8 +95,9 @@ own their machinery).
 
 ## 6. Leaf Execution & Test Seam
 
-- **Implementation Files:** `.claude/skills/security-audit/SKILL.md`
-  (pre-merge home), `plugin/auditforge/commands/audit.md`,
+- **Implementation Files:** `.claude/skills/auditforge/SKILL.md`
+  (canonical post-merge home), `.claude/skills/security-audit/SKILL.md`
+  (thin alias, ADR-222), `plugin/auditforge/commands/audit.md`,
   `plugin/auditforge/commands/freshness.md`,
   `docs/security/attack-classes/` (+ `ATTRIBUTION.md`),
   `scripts/report-schema.json`, `scripts/validate_findings.py`,

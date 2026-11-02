@@ -4,9 +4,8 @@ argument-hint: <target-path> [--fast]
 ---
 
 Run the full AuditForge audit against `$ARGUMENTS` (default: current project).
-Full sweep is the default: native scanner, all 12 universal engines in
-parallel with per-engine timeouts, KEV/EPSS enrichment, and unified JSON
-output with run_status.
+This command fronts the `auditforge` skill's six-phase workflow ("Full
+security audit"); the skill text is authoritative when they differ.
 
 1. Fast pre-pass: `audit_repo.py <target> --fail-on HIGH` (seconds, CI-gate).
 2. Full sweep: `universal_audit.py <target> --format json` (all engines;
@@ -21,8 +20,17 @@ output with run_status.
    `run_gap_analysis`) - every `must-build gap` is a finding, not advice.
 7. Policy coverage: `policy_audit.py <target>` (or `audit_policy_docs`) -
    every `missing (must)` policy is a governance finding.
-8. Validate artifacts: `validate_findings.py` / `validate_coverage_ledger.py`
-   before handing off; `check_freshness.py --skip-kev` if the KB was touched.
-9. Report run_status honestly: `complete`, or `partial` with the exact
-   reason (missing engines, skipped files). Never claim a clean bill on a
-   partial run.
+8. Coverage-led hunting: `coverage.py init` from recon, hunt per unit,
+   `coverage.py critic` after every wave, `coverage.py budget` against the
+   profile reserve - unworked units stay `planned`, never silently `covered`.
+9. Adversarial verification: fresh-context verifiers (hunter never
+   validates; `verdict` rejects finder==verifier), documented disproof
+   attempts, `poc_sandbox.py` for high/critical PoCs, `ledger.py verdict`
+   with `--evidence`. Refusal or inconclusive output means
+   `needs_validation`, never `confirmed`.
+10. Validate artifacts: `validate_findings.py` /
+    `validate_coverage_ledger.py` after every mutation; `check_freshness.py
+    --skip-kev` if the KB was touched.
+11. Report run_status honestly: `complete`, or `incomplete`/`partial` with
+    the exact reason (missing engines, skipped files, exhausted budget).
+    Never claim a clean bill on a partial run.
