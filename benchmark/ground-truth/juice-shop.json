@@ -1,0 +1,93 @@
+{
+  "target": "juice-shop",
+  "revision": "git:1618a611b173b4bf114028e6e02549950606e29d",
+  "curation": "code reading only; AuditForge never scanned this target (sealed held-out). Labels cross-checked against in-code vuln-code-snippet annotations where present.",
+  "vulns": [
+    {
+      "id": "JV1",
+      "file": "routes/search.ts",
+      "line": 23,
+      "cwe": "CWE-89",
+      "rule": "SDLC002",
+      "notes": "template-literal SQLi in product search"
+    },
+    {
+      "id": "JV2",
+      "file": "routes/login.ts",
+      "line": 34,
+      "cwe": "CWE-89",
+      "rule": "SDLC002",
+      "notes": "template-literal SQLi in login (annotated loginBenderChallenge)"
+    },
+    {
+      "id": "JV3",
+      "file": "routes/userProfile.ts",
+      "line": 65,
+      "cwe": "CWE-95",
+      "rule": "SDLC001",
+      "notes": "eval() on username-derived code"
+    },
+    {
+      "id": "JV4",
+      "file": "routes/fileServer.ts",
+      "line": 32,
+      "cwe": "CWE-22",
+      "rule": "",
+      "notes": "user file reaches sendFile (no native traversal rule)"
+    },
+    {
+      "id": "JV5",
+      "file": "routes/profileImageUrlUpload.ts",
+      "line": 24,
+      "cwe": "CWE-918",
+      "rule": "",
+      "notes": "fetch() of user-supplied URL (no native SSRF rule)"
+    },
+    {
+      "id": "JV6",
+      "file": "lib/xml.ts",
+      "line": 35,
+      "cwe": "CWE-611",
+      "rule": "",
+      "notes": "libxml2 NOENT+DTDLOAD (no native XXE rule)"
+    }
+  ],
+  "safe": [
+    {
+      "id": "JS1",
+      "file": "routes/search.ts",
+      "line": 47,
+      "notes": "static sqlite_master query, no user input"
+    },
+    {
+      "id": "JS2",
+      "file": "routes/fileServer.ts",
+      "line": 19,
+      "notes": "403 error branch, pure control flow"
+    },
+    {
+      "id": "JS3",
+      "file": "routes/login.ts",
+      "line": 41,
+      "notes": "JWT mint with server secret (proper issuance)"
+    },
+    {
+      "id": "JS4",
+      "file": "routes/profileImageUrlUpload.ts",
+      "line": 31,
+      "notes": "ORM findByPk lookup, no raw SQL"
+    },
+    {
+      "id": "JS5",
+      "file": "routes/appVersion.ts",
+      "line": 14,
+      "notes": "version endpoint, no user input or sink"
+    },
+    {
+      "id": "JS6",
+      "file": "routes/fileServer.ts",
+      "line": 15,
+      "notes": "taint source assignment (flag the sink, not this)"
+    }
+  ]
+}

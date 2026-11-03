@@ -104,7 +104,11 @@ own their machinery).
   `scripts/validate_coverage_ledger.py`,
   `scripts/test_validate_audit_skill.py`, `scripts/sync_skills.py`
   (canonical → distributable skill-copy sync; no dedicated test file —
-  covered by the drift gate below)
+  covered by the drift gate below), `scripts/benchmark.py`,
+  `scripts/test_benchmark.py` (frozen R-141 evaluation: pinned-target
+  scanner runs, agent-artifact record with fail-closed metadata,
+  ground-truth scoring with nearest-wins + located/classified split,
+  scorecard + limitations reports)
 - **Test Surface Seam:** `scripts/test_validate_audit_skill.py`
   (`test_skill_copies_in_sync` is the copy-drift gate),
   `scripts/sync_skills.py --check`,
@@ -117,7 +121,8 @@ own their machinery).
   produces validator-clean artifacts with a declared run_status and at
   least one traced `confirmed` or an honest all-`needs_validation` set.
 - **Evaluation Gate:** validator scripts exit 0 on run artifacts; skill +
-  plugin validate clean; pytest for validators.
+  plugin validate clean; pytest for validators (`test_validate_audit_skill.py`,
+  `test_benchmark.py`).
 - **Correctness Backpressure:** benchmark scorecard (see v2 plan):
   OWASP Benchmark Youden's J for the deterministic SAST lane (published
   static-tool ceiling ≈ 0.39 for calibration, not as a pass/fail bar);

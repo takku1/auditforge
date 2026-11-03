@@ -162,7 +162,7 @@ coverage-ledger.json --profile <quick|standard|deep>`; validate it
 controls are missing or flaws already fired. Hunt unauthenticated surfaces
 first, highest-value boundaries next, using the attack-class packs in
 `docs/security/attack-classes/` whose `When to use` gate matches.
-After every wave run `coverage.py critic` and hunt what it lists -
+After every wave run `coverage.py critic --ledger coverage-ledger.json --target <repo>` and hunt what it lists (R-153: `--target` is mandatory - without path-existence verification, fabricated reviewed-paths pass silently) -
 unworked units stay `planned`, never silently `covered`.
 `coverage.py budget` tells you when the critic + validation reserve is
 gone: then declare `run_status: incomplete` with the exact reason, never
@@ -203,7 +203,7 @@ suppresses only the failed claim.
 
 ```
 .venv/Scripts/python.exe scripts/coverage.py init --recon-json recon.json --out coverage-ledger.json --profile standard
-.venv/Scripts/python.exe scripts/coverage.py critic --ledger coverage-ledger.json
+.venv/Scripts/python.exe scripts/coverage.py critic --ledger coverage-ledger.json --target <repo>
 .venv/Scripts/python.exe scripts/coverage.py budget --ledger coverage-ledger.json --profile standard
 .venv/Scripts/python.exe scripts/coverage.py carry --prior old.json --ledger new.json --changed changed.json --out carried.json
 .venv/Scripts/python.exe scripts/coverage.py union --ledger coverage-ledger.json --gap-report gap.json

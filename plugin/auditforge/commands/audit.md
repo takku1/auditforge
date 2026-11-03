@@ -21,7 +21,7 @@ security audit"); the skill text is authoritative when they differ.
 7. Policy coverage: `policy_audit.py <target>` (or `audit_policy_docs`) -
    every `missing (must)` policy is a governance finding.
 8. Coverage-led hunting: `coverage.py init` from recon, hunt per unit,
-   `coverage.py critic` after every wave, `coverage.py budget` against the
+   `coverage.py critic --ledger coverage-ledger.json --target <target>` (mandatory) after every wave, `coverage.py budget` against the
    profile reserve - unworked units stay `planned`, never silently `covered`.
 9. Adversarial verification: fresh-context verifiers (hunter never
    validates; `verdict` rejects finder==verifier), documented disproof

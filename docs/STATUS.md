@@ -266,3 +266,4 @@ Python deps live in a project-local `.venv/` — never the system Python.
 
 ## Last Updated
 2026-11-02
+2026-11-02 R-141 frozen: benchmark protocol (docs/current/benchmark-protocol.md), scripts/benchmark.py (run-scanner/record/score/scorecard/limitations, fail-closed), calibration farm 7/0/0 on scanner-only, held-out Juice Shop set sealed at 1618a61 (6 vuln + 6 safe, never scanned), R-153 done, R-155 filed for the SDLC002 parameterized-query FP. Remaining: hunter/full-lifecycle agent runs, Cloudflare comparison, live Docker validation.

@@ -1,0 +1,82 @@
+{
+  "target": "calibration-farm",
+  "revision": "content:223633ac899e7c3e",
+  "vulns": [
+    {
+      "id": "V1",
+      "file": "db.py",
+      "line": 11,
+      "cwe": "CWE-89",
+      "rule": "SDLC002",
+      "notes": "string-% SQL concat"
+    },
+    {
+      "id": "V2",
+      "file": "db.py",
+      "line": 17,
+      "cwe": "CWE-89",
+      "rule": "SDLC002",
+      "notes": "plus-concat SQL"
+    },
+    {
+      "id": "V3",
+      "file": "shell.py",
+      "line": 7,
+      "cwe": "CWE-78",
+      "rule": "SDLC003",
+      "notes": "shell=True on concatenated cmd"
+    },
+    {
+      "id": "V4",
+      "file": "config.py",
+      "line": 3,
+      "cwe": "CWE-798",
+      "rule": "SEC001",
+      "notes": "hardcoded password"
+    },
+    {
+      "id": "V5",
+      "file": "config.py",
+      "line": 4,
+      "cwe": "CWE-798",
+      "rule": "SEC001",
+      "notes": "hardcoded api key"
+    },
+    {
+      "id": "V6",
+      "file": "config.py",
+      "line": 5,
+      "cwe": "CWE-489",
+      "rule": "CFG001",
+      "notes": "debug flag enabled"
+    },
+    {
+      "id": "V7",
+      "file": "app.js",
+      "line": 3,
+      "cwe": "CWE-79",
+      "rule": "WEB003",
+      "notes": "innerHTML sink"
+    }
+  ],
+  "safe": [
+    {
+      "id": "S1",
+      "file": "safe_db.py",
+      "line": 7,
+      "notes": "env-sourced secret"
+    },
+    {
+      "id": "S2",
+      "file": "safe_db.py",
+      "line": 12,
+      "notes": "qmark-parameterized query"
+    },
+    {
+      "id": "S3",
+      "file": "safe_db.py",
+      "line": 17,
+      "notes": "timing-safe compare"
+    }
+  ]
+}

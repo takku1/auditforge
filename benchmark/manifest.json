@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "targets": {
+    "calibration-farm": {
+      "kind": "local-fixture",
+      "path": "benchmark/fixtures/farm",
+      "revision": "content:223633ac899e7c3e",
+      "split": "calibration"
+    },
+    "juice-shop": {
+      "kind": "clone",
+      "path": "juice-shop",
+      "revision": "git:1618a611b173b4bf114028e6e02549950606e29d",
+      "split": "held-out",
+      "seal": "curated by reading; never scanned by AuditForge in curation"
+    },
+    "owasp-benchmark": {
+      "kind": "external",
+      "url": "https://github.com/OWASP-Benchmark/BenchmarkJava",
+      "revision": "TBD-pinned-at-execution",
+      "split": "held-out",
+      "status": "planned-toolchain-java-maven"
+    }
+  },
+  "ground_truth": {
+    "calibration-farm": "benchmark/ground-truth/farm.json",
+    "juice-shop": "benchmark/ground-truth/juice-shop.json"
+  },
+  "configs": [
+    "scanner-only",
+    "scanner-hunter",
+    "full-lifecycle"
+  ],
+  "budgets": {
+    "scanner-only": {
+      "max_seconds": 600
+    }
+  },
+  "comparison": {
+    "cloudflare_skill": "not-run",
+    "capability_absent": "mark n/a, never zero"
+  }
+}
